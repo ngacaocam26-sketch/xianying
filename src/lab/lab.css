@@ -1,0 +1,87 @@
+.relief-lab {
+  position: fixed; inset: 0; overflow: hidden;
+  background: #040507; color: #c9d0d6;
+  font-family: var(--font-latin), var(--font-serif);
+}
+.relief-canvas { position: absolute; inset: 0; cursor: none; touch-action: none; }
+.relief-canvas canvas { display: block; width: 100%; height: 100%; }
+.relief-vignette {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 48%, transparent 52%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+.relief-ring {
+  position: absolute; left: 0; top: 0; width: 30px; height: 30px; margin: -15px 0 0 -15px;
+  border: 1px solid rgba(236, 242, 247, 0.62); border-radius: 50%;
+  pointer-events: none; opacity: 0; transition: opacity 0.35s ease;
+}
+.relief-ring::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%; background: rgba(244, 247, 250, 0.9);
+}
+.relief-ring.is-visible { opacity: 1; }
+
+.relief-header {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 22px clamp(16px, 4vw, 40px); pointer-events: none;
+}
+.relief-header > * { pointer-events: auto; }
+.relief-wordmark { color: rgba(236, 240, 243, 0.82); text-decoration: none; font: 300 13px var(--font-serif); letter-spacing: 0.32em; }
+.relief-header nav { display: flex; gap: clamp(18px, 3vw, 34px); }
+.relief-header nav a, .relief-header nav button {
+  color: rgba(200, 209, 216, 0.6); text-decoration: none;
+  font: 10px var(--font-latin); letter-spacing: 0.3em; transition: color 0.3s;
+}
+.relief-header nav a:hover, .relief-header nav button:hover,
+.relief-header nav button[aria-expanded="true"] { color: rgba(240, 244, 247, 0.95); }
+
+.relief-status {
+  position: absolute; top: 62px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 999px;
+  background: rgba(14, 17, 20, 0.45); backdrop-filter: blur(10px);
+  color: rgba(214, 221, 226, 0.7); font-size: 12px; letter-spacing: 0.12em; white-space: nowrap;
+  pointer-events: none;
+}
+.relief-status span { width: 7px; height: 7px; border-radius: 50%; background: #3ddc84; box-shadow: 0 0 10px #3ddc8488; }
+
+.relief-panel {
+  position: absolute; top: 112px; right: clamp(16px, 4vw, 40px); width: 260px;
+  padding: 18px 18px 14px; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px;
+  background: rgba(12, 15, 18, 0.62); backdrop-filter: blur(18px);
+  font-family: var(--font-serif); font-size: 11px; color: rgba(208, 216, 222, 0.78);
+}
+.relief-panel label { display: grid; grid-template-columns: 62px 1fr 34px; align-items: center; gap: 10px; min-height: 30px; }
+.relief-panel input { width: 100%; accent-color: #d8e0e6; }
+.relief-panel output { text-align: right; font-family: var(--font-latin); color: rgba(208, 216, 222, 0.55); }
+.relief-panel footer {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(208, 216, 222, 0.5);
+}
+.relief-panel footer button { color: rgba(230, 236, 240, 0.8); letter-spacing: 0.1em; }
+
+.relief-dock {
+  position: absolute; left: 50%; bottom: max(22px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  width: min(420px, calc(100% - 32px)); text-align: center; pointer-events: none;
+}
+.relief-dock > * { pointer-events: auto; }
+.relief-hint { margin: 0; color: rgba(200, 209, 216, 0.45); font: 300 11px var(--font-serif); letter-spacing: 0.24em; }
+.relief-message { margin: 0; color: rgba(240, 210, 190, 0.85); font: 12px var(--font-serif); }
+.relief-upload {
+  display: flex; align-items: center; gap: 10px; padding: 9px 18px;
+  color: rgba(222, 229, 234, 0.72); font: 12px var(--font-serif); letter-spacing: 0.12em;
+  border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 999px; background: rgba(14, 17, 20, 0.4);
+  backdrop-filter: blur(10px); transition: color 0.3s, border-color 0.3s;
+}
+.relief-upload em { font: italic 12px var(--font-latin); letter-spacing: 0.08em; color: rgba(200, 209, 216, 0.45); }
+.relief-upload:hover { color: #f1f4f6; border-color: rgba(255, 255, 255, 0.16); }
+.relief-upload:disabled { opacity: 0.6; cursor: progress; }
+.relief-note { margin: 0; color: rgba(190, 199, 206, 0.3); font: 10px var(--font-serif); letter-spacing: 0.14em; }
+
+@media (max-width: 600px) {
+  .relief-status { top: 58px; font-size: 11px; }
+  .relief-panel { top: auto; bottom: 150px; left: 16px; right: 16px; width: auto; }
+}

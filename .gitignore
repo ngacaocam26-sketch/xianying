@@ -21,3 +21,6 @@ work/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Third-party reference videos (not ours to publish)
+*.mp4
