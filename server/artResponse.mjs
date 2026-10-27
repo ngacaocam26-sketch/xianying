@@ -59,3 +59,18 @@ export function parseArtResponse(source) {
   }
   return { reply: value.reply, visual: validateVisual(value.visual) };
 }
+
+export const TITLE_RESPONSE_FORMAT = { type: 'json_schema', json_schema: {
+  name: 'xianying_title', strict: true, schema: { type: 'object', additionalProperties: false,
+    properties: { title: { type: 'string' }, summary: { type: 'string' } }, required: ['title', 'summary'] } } };
+
+// 模型偶尔会带上引号或句号；清掉首尾符号后再检查长度，不合格就当作没有命名。
+export function parseTitle(source) {
+  const value = JSON.parse(source);
+  const clean = (text, max) => typeof text === 'string'
+    ? text.replace(/^[\s"'“”‘’《》「」『』]+|[\s"'“”‘’《》「」『』。．.!！]+$/g, '').replace(/\s+/g, ' ').slice(0, max + 1) : '';
+  const title = clean(value?.title, 16);
+  const summary = clean(value?.summary, 60);
+  if (!title || title.length > 16 || !summary || summary.length > 60) throw new Error('Invalid title');
+  return { title, summary: summary + (/[。！？…]$/.test(summary) ? '' : '。') };
+}

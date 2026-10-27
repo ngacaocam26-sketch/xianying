@@ -76,3 +76,23 @@ test('v3 relief keeps its downscaled photo and full parameters, while v1/v2 rule
   ]) assert.throws(() => validateSnapshot({ ...scene, ...change }));
   assert.throws(() => validateSnapshot({ ...base().scene, relief: scene.relief }));
 });
+test('v3 sculpture is a seeded default form without photo data; old nebula records keep their own kind', () => {
+  const scene = { ...reliefWork().scene, kind: 'sculpture', relief: undefined };
+  delete scene.relief;
+  const work = validateArtwork({ ...reliefWork(), scene });
+  assert.equal(work.scene.kind, 'sculpture');
+  assert.equal('relief' in work.scene, false);
+  assert.equal(validateCard(artworkCard(work)).kind, 'sculpture');
+  assert.throws(() => validateSnapshot({ ...scene, relief: reliefWork().scene.relief }));
+  assert.throws(() => validateSnapshot({ ...scene, photo: photoWork().scene.photo }));
+  assert.throws(() => validateSnapshot({ ...scene, version: 2 }));
+  assert.equal(validateArtwork(base()).scene.kind, 'nebula');
+});
+test('optional AI summary is kept on works and cards, bounded, and absent on older records', () => {
+  const work = validateArtwork({ ...base(), summary: '  你终于把那件事说出口了。 ' });
+  assert.equal(work.summary, '你终于把那件事说出口了。');
+  assert.equal(validateCard(artworkCard(work)).summary, '你终于把那件事说出口了。');
+  assert.equal('summary' in validateArtwork(base()), false);
+  assert.equal('summary' in artworkCard(validateArtwork(base())), false);
+  for (const summary of ['', '   ', 'x'.repeat(121), 42]) assert.throws(() => validateArtwork({ ...base(), summary }));
+});

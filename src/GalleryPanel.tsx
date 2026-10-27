@@ -94,7 +94,8 @@ export default function GalleryPanel({ repository, onOpen, onClose, canOpen }: {
                 <img src={card.thumbnail} alt="" width="320" height="220" loading="lazy" />
               </button>
               <h2>{card.title}</h2>
-              <p>{card.kind === 'nebula' ? 'SCULPTURE' : 'PHOTO'} · {stamp(card.createdAt)}</p>
+              {card.summary && index === active && <p className="gallery-summary">{card.summary}</p>}
+              <p>{card.kind === 'nebula' || card.kind === 'sculpture' ? 'SCULPTURE' : 'PHOTO'} · {stamp(card.createdAt)}</p>
             </article>
           ))}
         </div>

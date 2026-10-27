@@ -1,5 +1,5 @@
-import { SYSTEM_PROMPT, SCULPTURE_PROMPT } from './prompt.mjs';
-import { ART_RESPONSE_FORMAT, SCULPTURE_RESPONSE_FORMAT, partialReply, parseArtResponse } from './artResponse.mjs';
+import { SYSTEM_PROMPT, SCULPTURE_PROMPT, TITLE_PROMPT } from './prompt.mjs';
+import { ART_RESPONSE_FORMAT, SCULPTURE_RESPONSE_FORMAT, TITLE_RESPONSE_FORMAT, partialReply, parseArtResponse, parseTitle } from './artResponse.mjs';
 import { DEFAULT_VISUAL, validateVisual } from '../src/visual.ts';
 
 class ApiError extends Error {
@@ -52,6 +52,18 @@ function validateUtterances(body) {
     words.some(word => typeof word !== 'string' || !word.trim() || word.length > 2000) ||
     words.join('').length > 8000) throw new ApiError(400, 'INVALID_INPUT', '这段表达暂时无法显影，请说一句简短的话再试。');
   return [{ role: 'user', content: '按顺序的用户表达：' + JSON.stringify(words.map(word => word.trim())) }];
+}
+
+// 凝结命名：最近的文字或语音记录，最多 12 句，至少有一句是用户说的。
+function validateTranscript(body) {
+  const lines = body?.lines;
+  if (body?.image != null || !Array.isArray(lines) || !lines.length || lines.length > 12 ||
+    lines.some(line => !['user', 'assistant'].includes(line?.role) || typeof line.text !== 'string' ||
+      !line.text.trim() || line.text.length > (line.role === 'user' ? 2000 : 4000)) ||
+    !lines.some(line => line.role === 'user') || lines.reduce((sum, line) => sum + line.text.length, 0) > 12000) {
+    throw new ApiError(400, 'INVALID_INPUT', '这段对话暂时无法命名，可以自己写一个名字。');
+  }
+  return [{ role: 'user', content: '这次对话的记录：' + JSON.stringify(lines.map(line => ({ role: line.role, text: line.text.trim() }))) }];
 }
 
 async function readJson(req) {
@@ -155,7 +167,8 @@ export function createApiHandler({
       return;
     }
     const sculpture = path === '/api/sculpture';
-    if ((!sculpture && path !== '/api/chat') || req.method !== 'POST') {
+    const naming = path === '/api/title';
+    if ((!sculpture && !naming && path !== '/api/chat') || req.method !== 'POST') {
       json(404, { code: 'NOT_FOUND', message: '接口不存在。' });
       return;
     }
@@ -167,7 +180,7 @@ export function createApiHandler({
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const body = await readJson(req);
-      const messages = sculpture ? validateUtterances(body) : validateMessages(body);
+      const messages = naming ? validateTranscript(body) : sculpture ? validateUtterances(body) : validateMessages(body);
       const image = validateImage(body.image);
       const currentVisual = validateVisual(body.visual) ?? DEFAULT_VISUAL;
       if (image) {
@@ -192,17 +205,25 @@ export function createApiHandler({
         headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: config.model,
-          messages: [{ role: 'system', content: (sculpture ? SCULPTURE_PROMPT : SYSTEM_PROMPT) + '\n当前作品参数：' + JSON.stringify(currentVisual) }, ...messages],
-          response_format: sculpture ? SCULPTURE_RESPONSE_FORMAT : ART_RESPONSE_FORMAT,
-          stream: !sculpture,
+          messages: [{ role: 'system', content: naming ? TITLE_PROMPT
+            : (sculpture ? SCULPTURE_PROMPT : SYSTEM_PROMPT) + '\n当前作品参数：' + JSON.stringify(currentVisual) }, ...messages],
+          response_format: naming ? TITLE_RESPONSE_FORMAT : sculpture ? SCULPTURE_RESPONSE_FORMAT : ART_RESPONSE_FORMAT,
+          stream: !sculpture && !naming,
           enable_thinking: false,
-          max_tokens: sculpture ? 350 : 900,
+          max_tokens: naming ? 200 : sculpture ? 350 : 900,
         }),
         signal: controller.signal,
       });
       if (!upstream.ok) {
         await upstream.body?.cancel();
         throw providerError(upstream.status);
+      }
+      if (naming) {
+        const result = await upstream.json();
+        const choice = result.choices?.[0];
+        const content = choice?.message?.content;
+        if (choice?.finish_reason !== 'stop' || typeof content !== 'string' || content.length > 4000) throw new Error('Incomplete title');
+        json(200, parseTitle(content)); return;
       }
       if (sculpture) {
         const result = await upstream.json();

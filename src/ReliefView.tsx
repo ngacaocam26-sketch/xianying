@@ -26,8 +26,9 @@ function measureInsets(container: HTMLElement) {
   };
 }
 
+// 新画法的 React 外壳：有照片时显示照片浮雕，没有照片时显示默认雕塑。
 export default function ReliefView({ photo, visual, snapshot = null, active = true, activity, ref }: {
-  photo: ReliefPhoto; visual: VisualState; snapshot?: SceneSnapshot | null; active?: boolean;
+  photo: ReliefPhoto | null; visual: VisualState; snapshot?: SceneSnapshot | null; active?: boolean;
   activity?: { current: ActivitySignal }; ref?: Ref<ParticleSceneHandle>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,8 +41,9 @@ export default function ReliefView({ photo, visual, snapshot = null, active = tr
     const scene = sceneRef.current;
     if (!scene) throw new Error('画面还没有准备好，请稍等再凝结。');
     const shot = scene.capture();
+    const common = { version: 3, seed: NEBULA_SEED, phase: shot.phase, visual: shot.visual, photo: null };
     return {
-      scene: validateSnapshot({ version: 3, kind: 'relief', seed: NEBULA_SEED, phase: shot.phase, visual: shot.visual, photo: null, relief: photo }),
+      scene: validateSnapshot(photo ? { ...common, kind: 'relief', relief: photo } : { ...common, kind: 'sculpture' }),
       thumbnail: shot.thumbnail,
     };
   } }), [photo]);
@@ -67,6 +69,11 @@ export default function ReliefView({ photo, visual, snapshot = null, active = tr
   }, []);
 
   useEffect(() => {
+    if (!photo) {
+      sceneRef.current?.setSculpture();
+      setError(null);
+      return;
+    }
     let cancelled = false;
     loadReliefPhoto(photo)
       .then(source => { if (!cancelled) { sceneRef.current?.setSource(source); setError(null); } })

@@ -6,6 +6,7 @@ import { VoiceSculptor } from './voice/sculptor';
 import type { VisualState } from './visual';
 import ReplyCard from './ReplyCard';
 import { Icon } from './icons';
+import type { TranscriptLine } from './title';
 
 type Turn = { id: string; role: 'user' | 'assistant'; text: string; interrupted?: boolean };
 const statusText: Record<VoiceState, string> = {
@@ -14,10 +15,10 @@ const statusText: Record<VoiceState, string> = {
 };
 
 export type VoiceSessionFactory = (worklet: string, onEvent: (event: VoiceEvent) => void) => VoiceSession;
-export default function VoicePanel({ open, onClose, onCondense, visual, onVisual, onActivity, onStatus, sessionFactory }: {
+export default function VoicePanel({ open, onClose, onCondense, visual, onVisual, onActivity, onStatus, onTranscript, sessionFactory }: {
   open: boolean; onClose: () => void; onCondense: () => void; visual: VisualState;
   onVisual: (visual: VisualState) => void; onActivity: (level: number) => void;
-  onStatus: (state: VoiceState | null) => void; sessionFactory?: VoiceSessionFactory;
+  onStatus: (state: VoiceState | null) => void; onTranscript: (lines: TranscriptLine[]) => void; sessionFactory?: VoiceSessionFactory;
 }) {
   const [state, setState] = useState<VoiceState | null>(null);
   const [message, setMessage] = useState('');
@@ -32,6 +33,10 @@ export default function VoicePanel({ open, onClose, onCondense, visual, onVisual
   const [retryArt, setRetryArt] = useState(false);
 
   useEffect(() => { callbacks.current.onStatus(state); }, [state]);
+  const transcriptCallback = useRef(onTranscript); transcriptCallback.current = onTranscript;
+  useEffect(() => {
+    transcriptCallback.current(turns.filter(turn => turn.text.trim() && turn.text !== '…').map(turn => ({ role: turn.role, text: turn.text })));
+  }, [turns]);
 
   const stop = () => { sculptor.current?.stop(); sculptor.current = null; session.current?.stop(); session.current = null; setState(null); setArtMessage(''); setRetryArt(false); };
   useEffect(() => {

@@ -209,3 +209,30 @@ test('browser returns bounded visual result only after a complete stream and ret
   assert.equal(invalid.visual, null);
   assert.equal(invalid.visualWarning, '回复已收到，画面暂时保留。');
 });
+
+test('title API names the moment from the transcript, cleans punctuation and rejects bad input or output', async (t) => {
+  const sent = [];
+  let reply = { title: '「被听见的下午」', summary: '你和老师聊完，觉得自己的想法终于被认真接住了' };
+  const app = await fixture(t, { fetchImpl: async (url, options) => {
+    sent.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) }, finish_reason: 'stop' }] }));
+  } });
+  const name = (body) => fetch(`${app.base}/api/title`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const lines = [{ role: 'user', text: '虚构测试：今天和老师聊完特别开心。' }, { role: 'assistant', text: '虚构回复：被理解的感觉很珍贵。' }];
+  const response = await name({ lines });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { title: '被听见的下午', summary: '你和老师聊完，觉得自己的想法终于被认真接住了。' });
+  assert.equal(sent[0].stream, false);
+  assert.match(sent[0].messages[0].content, /为《显影》里凝结的一刻命名/);
+  assert.equal(sent[0].response_format.json_schema.name, 'xianying_title');
+  assert.match(sent[0].messages[1].content, /今天和老师聊完/);
+  for (const body of [{ lines: [] }, { lines: [{ role: 'assistant', text: '只有 AI' }] }, { lines: [{ role: 'system', text: 'x' }] },
+    { lines: Array(13).fill(lines[0]) }, { lines: [{ role: 'user', text: 'x'.repeat(2001) }] }, { lines, image: { dataUrl: 'x' } }]) {
+    assert.equal((await name(body)).status, 400);
+  }
+  assert.equal(sent.length, 1);
+  reply = { title: '', summary: '空标题' };
+  const failed = await name({ lines });
+  assert.equal(failed.status, 502);
+  assert.ok(!(await failed.text()).includes('空标题'));
+});

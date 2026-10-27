@@ -6,6 +6,7 @@ import type { VisualState } from './visual';
 import ReplyCard from './ReplyCard';
 import type { ReplyLine } from './ReplyCard';
 import { Icon } from './icons';
+import type { TranscriptLine } from './title';
 
 type Turn = {
   id: number; input: string; output: string;
@@ -13,10 +14,11 @@ type Turn = {
 };
 export type ChatLink = 'checking' | 'ready' | 'offline';
 
-export default function ChatPanel({ open, photo, photoBusy, visual, onVisual, onChoosePhoto, onVoice, onCondense, onActivity, onStatus }: {
+export default function ChatPanel({ open, photo, photoBusy, visual, onVisual, onChoosePhoto, onVoice, onCondense, onActivity, onStatus, onTranscript }: {
   open: boolean; photo: PhotoContext | null; photoBusy: boolean;
   visual: VisualState; onVisual: (visual: VisualState) => void; onChoosePhoto: () => void; onVoice: () => void;
   onCondense: () => void; onActivity: (level: number) => void; onStatus: (link: ChatLink, busy: boolean) => void;
+  onTranscript: (lines: TranscriptLine[]) => void;
 }) {
   const [draft, setDraft] = useState('');
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -32,6 +34,12 @@ export default function ChatPanel({ open, photo, photoBusy, visual, onVisual, on
   const link: ChatLink = checking ? 'checking' : status?.configured && !statusError ? 'ready' : 'offline';
 
   useEffect(() => { statusCallback.current(link, busy); }, [link, busy]);
+  // 只交出完整的轮次，凝结命名用；未完成或失败的片段不算。
+  const transcriptCallback = useRef(onTranscript); transcriptCallback.current = onTranscript;
+  useEffect(() => {
+    transcriptCallback.current(turns.filter(turn => turn.state === 'done').flatMap(turn => [
+      { role: 'user' as const, text: turn.input }, { role: 'assistant' as const, text: turn.output }]));
+  }, [turns]);
 
   useEffect(() => {
     if (!open) return;

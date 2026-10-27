@@ -106,7 +106,7 @@ export default function ReliefLab() {
 
       <div className="relief-dock">
         {message && <p className="relief-message" role="alert">{message}</p>}
-        <p className="relief-hint">{coarse ? '按住画面拖动，把粒子拨开' : '移动鼠标，把粒子拨开'}</p>
+        <p className="relief-hint">{coarse ? '按住画面拖动，把粒子拨开' : '按住鼠标拖动，把粒子拨开'}</p>
         <input ref={inputRef} type="file" hidden accept="image/jpeg,image/png,image/webp"
           aria-label="选择本地照片" onChange={event => void selectPhoto(event)} />
         <button type="button" className="relief-upload" disabled={loading} onClick={() => inputRef.current?.click()}>

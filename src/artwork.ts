@@ -6,11 +6,13 @@ export const NEBULA_SEED = 0x5849414e;
 // v3 照片浮雕保存缩小重编码的照片（最长边 ≤ 1024，无原文件元数据），恢复时由它重新生成粒子。
 export type ReliefPhoto = { image: string; width: number; height: number };
 export type SceneSnapshot = {
-  version: 1 | 2 | 3; kind: 'nebula' | 'photo' | 'relief'; seed: number; phase: number;
+  version: 1 | 2 | 3; kind: 'nebula' | 'photo' | 'relief' | 'sculpture'; seed: number; phase: number;
   visual: VisualState | LegacyVisual; photo: PhotoParticleData | null; relief?: ReliefPhoto;
 };
 export type Artwork = {
   version: 1 | 2 | 3; id: string; title: string; createdAt: number; thumbnail: string; scene: SceneSnapshot;
+  // AI 在凝结时写的一句总结；早期作品和没有对话的作品没有这一项。
+  summary?: string;
 };
 const JPEG_DATA_URL = /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/;
 export type ArtworkCard = Omit<Artwork, 'scene'> & { kind: SceneSnapshot['kind']; removedAt: number | null };
@@ -32,8 +34,8 @@ function array(value: unknown, length: number, min: number, max: number): Float3
 export function validateSnapshot(value: unknown): SceneSnapshot {
   const input = object(value);
   if (![1, 2, 3].includes(Number(input.version)) || typeof input.version !== 'number' || input.seed !== NEBULA_SEED) throw invalid();
-  // v1/v2 只有雕塑与旧照片点云；v3 只用于照片浮雕，旧版本数据的读取规则保持不变。
-  if (!(input.version === 3 ? ['relief'] : ['nebula', 'photo']).includes(String(input.kind))) throw invalid();
+  // v1/v2 只有旧星云与旧照片点云；v3 是新画法的照片浮雕和默认雕塑，旧版本数据的读取规则保持不变。
+  if (!(input.version === 3 ? ['relief', 'sculpture'] : ['nebula', 'photo']).includes(String(input.kind))) throw invalid();
   const full = validateVisual(input.visual, input.version === 1);
   if (!full) throw invalid();
   const visual = input.version === 1 ? { dispersion: full.dispersion, motion: full.motion, warmth: full.warmth } : full;
@@ -71,8 +73,10 @@ function metadata(value: unknown) {
     typeof input.title !== 'string' || !input.title.trim() || input.title.length > 40 ||
     typeof input.thumbnail !== 'string' || input.thumbnail.length > 160000 ||
     !JPEG_DATA_URL.test(input.thumbnail)) throw invalid();
+  if (input.summary !== undefined && (typeof input.summary !== 'string' || !input.summary.trim() || input.summary.length > 120)) throw invalid();
   return { version: input.version as 1 | 2 | 3, id: input.id, title: input.title.trim(),
-    createdAt: number(input.createdAt, 0, 8.64e15), thumbnail: input.thumbnail };
+    createdAt: number(input.createdAt, 0, 8.64e15), thumbnail: input.thumbnail,
+    ...(typeof input.summary === 'string' ? { summary: input.summary.trim() } : {}) };
 }
 export function validateArtwork(value: unknown): Artwork {
   const input = object(value);
@@ -80,12 +84,13 @@ export function validateArtwork(value: unknown): Artwork {
   return { ...metadata(input), scene: validateSnapshot(input.scene) };
 }
 export function artworkCard(work: Artwork, removedAt: number | null = null): ArtworkCard {
-  return { version: work.version, id: work.id, title: work.title, createdAt: work.createdAt, thumbnail: work.thumbnail, kind: work.scene.kind, removedAt };
+  return { version: work.version, id: work.id, title: work.title, createdAt: work.createdAt, thumbnail: work.thumbnail,
+    ...(work.summary ? { summary: work.summary } : {}), kind: work.scene.kind, removedAt };
 }
 export function validateCard(value: unknown): ArtworkCard {
   const input = object(value);
-  if (input.kind !== 'photo' && input.kind !== 'nebula' && input.kind !== 'relief') throw invalid();
-  return { ...metadata(input), kind: input.kind, removedAt: input.removedAt === null ? null : number(input.removedAt, 0, 8.64e15) };
+  if (!['photo', 'nebula', 'relief', 'sculpture'].includes(String(input.kind))) throw invalid();
+  return { ...metadata(input), kind: input.kind as ArtworkCard['kind'], removedAt: input.removedAt === null ? null : number(input.removedAt, 0, 8.64e15) };
 }
 
 export function makeArtwork(scene: SceneSnapshot, thumbnail: string): Artwork {

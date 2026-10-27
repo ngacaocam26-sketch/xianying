@@ -3,6 +3,15 @@ import { DEFAULT_VISUAL, smoothVisual } from '../visual';
 import type { VisualState } from '../visual';
 import { activityLevel } from '../emotionShape';
 import type { ActivitySignal } from '../emotionShape';
+import { seededRandom } from './random';
+import { buildSculpture, pickForm, sculptureCoreVertex, sculptureDustVertex } from './sculpture';
+
+// 雕塑的小洞以屏幕为准：试验页的孔半径 0.24（照片宽 5）约等于画面高度的 1/20。
+const SCREEN_RADIUS_PER_WORLD = 0.42;
+// 压痕分两层：孔的核心只占设定半径的七成，外面还有三倍宽的柔和隆起把材料往外挤，
+// 两者叠加后看得见的孔与原来差不多大，但孔外的画面会被推开、鼓起，像按进软泥。
+const HOLE_CORE = 0.7;
+const SWELL_SPAN = 3;
 
 export interface ReliefParams {
   density: number;
@@ -31,6 +40,8 @@ export interface ReliefOptions {
 
 export interface ReliefScene {
   setSource: (source: ReliefSource) => void;
+  // 没有照片时的默认雕塑：几块软体挤成的一团，作品参数改变它的形态。
+  setSculpture: () => void;
   setParams: (params: ReliefParams) => void;
   // 作品参数只改变光感、冷暖、流速和散开程度，照片主体保持可辨认。
   setVisual: (visual: VisualState) => void;
@@ -84,7 +95,8 @@ const SURFACE_GLSL = /* glsl */ `
     vec2 n = uv * 2.0 - 1.0;
     return l * uRelief - dot(n, n) * 0.22;
   }
-  float dentAt(vec2 uv) { return texture2D(uDent, uv).r; }
+  // r：孔（1-(d/R)²）；g：外围隆起（(1-(d/3R)²)²）。
+  vec2 dentAt(vec2 uv) { return texture2D(uDent, uv).rg; }
 `;
 
 const coreVertex = /* glsl */ `
@@ -102,28 +114,30 @@ const coreVertex = /* glsl */ `
       return;
     }
 
-    float dent = dentAt(uv);
     vec2 ex = vec2(uDentTexel.x, 0.0);
     vec2 ey = vec2(0.0, uDentTexel.y);
-    vec2 dentSlope = vec2(dentAt(uv + ex) - dentAt(uv - ex), dentAt(uv + ey) - dentAt(uv - ey))
-      / (2.0 * uDentTexel * uWorld);
+    vec2 dent = dentAt(uv);
+    vec2 dentLeft = dentAt(uv - ex), dentRight = dentAt(uv + ex);
+    vec2 dentDown = dentAt(uv - ey), dentUp = dentAt(uv + ey);
+    vec2 holeSlope = vec2(dentRight.x - dentLeft.x, dentUp.x - dentDown.x) / (2.0 * uDentTexel * uWorld);
+    vec2 swellSlope = vec2(dentRight.y - dentLeft.y, dentUp.y - dentDown.y) / (2.0 * uDentTexel * uWorld);
     vec2 hx = vec2(uHeightTexel.x, 0.0);
     vec2 hy = vec2(0.0, uHeightTexel.y);
     vec2 heightSlope = vec2(heightAt(uv + hx) - heightAt(uv - hx), heightAt(uv + hy) - heightAt(uv - hy))
       / (2.0 * uHeightTexel * uWorld);
-    vec3 normal = normalize(vec3(-heightSlope * 0.6, 1.0));
     vec3 p = vec3((uv - 0.5) * uWorld, heightAt(uv));
 
-    // 穿透的孔：压痕场是 1 - (r/R)²，由它反推每颗粒子离孔心的距离，
-    // 把孔内的粒子正好推到孔沿外，中心露出黑色，被推开的粒子堆成亮环。
-    // 压痕回弹变浅时 open 随之变小，孔从外向内慢慢合上。
-    float slopeLength = length(dentSlope);
+    // 孔：由 1-(r/R)² 反推离孔心的距离，把孔内粒子推到孔沿；随机幅度让孔口不是一刀切的圆。
+    // 隆起：越远推得越少，周围的材料被一起挤开；回弹时两层同时变浅，孔从外向内合上。
     float scatter = seed * 6.2831853;
-    vec2 away = slopeLength > 1e-3 ? -dentSlope / slopeLength : vec2(cos(scatter), sin(scatter));
-    float open = 1.0 - sqrt(max(0.0, 1.0 - dent));
-    p.xy += away * uRadius * open * (0.92 + 0.3 * fract(seed * 17.3));
-    // 被推开的粒子堆到孔沿表面之上，不被原位的邻居挡住，孔沿因此鼓起、发亮。
-    p.z += open * uRadius * 0.35;
+    float holeLength = length(holeSlope), swellLength = length(swellSlope);
+    vec2 swellAway = swellLength > 1e-3 ? -swellSlope / swellLength : vec2(cos(scatter), sin(scatter));
+    vec2 away = holeLength > 1e-3 ? -holeSlope / holeLength : swellAway;
+    float open = 1.0 - sqrt(max(0.0, 1.0 - dent.x));
+    p.xy += away * uRadius * open * (0.8 + 0.45 * fract(seed * 17.3)) + swellAway * uRadius * 0.45 * dent.y;
+    // 被挤开的材料向上鼓起，法线随之外倾：坑沿一侧受光，一侧落进阴影。
+    p.z += uRadius * (0.5 * dent.y + 0.25 * open);
+    vec3 normal = normalize(vec3(-heightSlope * 0.6 - swellSlope * uRadius * 0.5, 1.0));
 
     vec2 outward = normalize(uv * 2.0 - 1.0 + 1e-4);
     float drift = pow(vanish, 1.4) * uSpread;
@@ -138,10 +152,8 @@ const coreVertex = /* glsl */ `
     float grain = 0.9 + 0.16 * fract(seed * 91.7);
     vec3 photo = texture2D(uPhoto, uv).rgb;
     vColor = photo * mix(0.35, 1.0, clamp(shade, 0.0, 1.6)) * grain;
-    // 被挤开的粒子带一点亮光，孔沿因此发亮。
-    float luminance = dot(photo, vec3(0.2126, 0.7152, 0.0722));
-    vColor = vColor * (1.0 + open * 0.7) + open * (0.06 + luminance * 0.3) * vec3(0.92, 0.95, 1.0);
-    vColor *= uTint * uLight;
+    // 被挤压的材料略亮一些，坑沿的明暗主要来自上面的法线。
+    vColor *= (1.0 + open * 0.6 + dent.y * 0.15) * uTint * uLight;
 
     vec4 viewPosition = modelViewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * viewPosition;
@@ -218,29 +230,25 @@ const stampFragment = /* glsl */ `
   uniform vec2 uFrom;
   uniform vec2 uTo;
   uniform float uRadius;
+  uniform float uSpan;
   uniform float uStrength;
   uniform float uDecay;
   varying vec2 vUv;
   void main() {
-    float previous = texture2D(uPrevious, vUv).r * 0.8
-      + (texture2D(uPrevious, vUv + vec2(uTexel.x, 0.0)).r + texture2D(uPrevious, vUv - vec2(uTexel.x, 0.0)).r
-      + texture2D(uPrevious, vUv + vec2(0.0, uTexel.y)).r + texture2D(uPrevious, vUv - vec2(0.0, uTexel.y)).r) * 0.05;
+    vec2 previous = texture2D(uPrevious, vUv).rg * 0.8
+      + (texture2D(uPrevious, vUv + vec2(uTexel.x, 0.0)).rg + texture2D(uPrevious, vUv - vec2(uTexel.x, 0.0)).rg
+      + texture2D(uPrevious, vUv + vec2(0.0, uTexel.y)).rg + texture2D(uPrevious, vUv - vec2(0.0, uTexel.y)).rg) * 0.05;
     vec2 p = vUv * uWorld;
     vec2 a = uFrom * uWorld;
     vec2 ab = uTo * uWorld - a;
     float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
     float d = length(p - a - ab * t) / uRadius;
     float cap = d < 1.0 ? 1.0 - d * d : 0.0;
-    gl_FragColor = vec4(max(previous * uDecay, cap * uStrength), 0.0, 0.0, 1.0);
+    float w = d / uSpan;
+    float swell = w < 1.0 ? (1.0 - w * w) * (1.0 - w * w) : 0.0;
+    gl_FragColor = vec4(max(previous * uDecay, vec2(cap, swell) * uStrength), 0.0, 1.0);
   }
 `;
-
-function seededRandom(seed: number) {
-  return () => {
-    seed = Math.imul(seed, 1664525) + 1013904223 | 0;
-    return (seed >>> 0) / 4294967296;
-  };
-}
 
 // 抖动网格：每格一颗，位置随机偏移，避免出现规则的点阵纹理。
 function buildCore(aspect: number, longEdge: number) {
@@ -317,7 +325,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     uDentTexel: { value: new THREE.Vector2() },
     uHeightTexel: { value: new THREE.Vector2() },
     uRelief: { value: params.relief },
-    uRadius: { value: params.radius },
+    uRadius: { value: params.radius * HOLE_CORE },
     uTime: { value: 0 },
     uSpacing: { value: 0.01 },
     uSize: { value: params.size },
@@ -326,6 +334,12 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     uMinSize: { value: 1 },
     uLight: { value: 1 },
     uTint: { value: new THREE.Vector3(1, 1, 1) },
+    uShape: { value: new THREE.Vector4(0.5, 0.5, 0.5, 0.5) },
+    uFormA: { value: new THREE.Vector4(1, 0, 0, 0) },
+    uFormB: { value: 0 },
+    uScreen: { value: new THREE.Vector2(2, 2) },
+    uScreenRadius: { value: params.radius * SCREEN_RADIUS_PER_WORLD },
+    uTanHalf: { value: 1 },
   };
   const coreMaterial = new THREE.ShaderMaterial({
     uniforms, vertexShader: coreVertex, fragmentShader: coreFragment,
@@ -335,14 +349,24 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     uniforms, vertexShader: dustVertex, fragmentShader: dustFragment,
     transparent: true, depthTest: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
+  const sculptureMaterial = new THREE.ShaderMaterial({
+    uniforms, vertexShader: sculptureCoreVertex, fragmentShader: coreFragment,
+    depthTest: true, depthWrite: true,
+  });
+  const sculptureDustMaterial = new THREE.ShaderMaterial({
+    uniforms, vertexShader: sculptureDustVertex, fragmentShader: dustFragment,
+    transparent: true, depthTest: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
 
   const stampUniforms = {
     uPrevious: { value: null as THREE.Texture | null },
     uTexel: { value: new THREE.Vector2() },
-    uWorld: uniforms.uWorld,
+    // 照片模式是照片平面，雕塑模式是屏幕；每帧按当前内容设置。
+    uWorld: { value: new THREE.Vector2(5, 3.3) },
     uFrom: { value: new THREE.Vector2() },
     uTo: { value: new THREE.Vector2() },
-    uRadius: uniforms.uRadius,
+    uRadius: { value: params.radius * HOLE_CORE },
+    uSpan: { value: SWELL_SPAN },
     uStrength: { value: 0 },
     uDecay: { value: 1 },
   };
@@ -356,7 +380,14 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   stampScene.add(stampQuad);
   const stampCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
+  let mode: 'photo' | 'sculpture' | null = null;
+  // 五种雕塑形态的当前权重与各自的颗粒间距；权重平滑地流向目标形态。
+  const formWeights = [1, 0, 0, 0, 0];
+  let formSpacings = [0.01, 0.01, 0.01, 0.01, 0.01];
+  let snapForm = true;
   let source: ReliefSource | null = null;
+  // 取景依据的内容尺寸：照片平面或雕塑包围盒。
+  const contentSize = new THREE.Vector2(5, 3.3);
   let photoTexture: THREE.CanvasTexture | null = null;
   let heightTexture: THREE.CanvasTexture | null = null;
   let core: THREE.Points | null = null;
@@ -372,7 +403,9 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     const halfTan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    const world = uniforms.uWorld.value;
+    const world = contentSize;
+    uniforms.uScreen.value.set(camera.aspect * 2, 2);
+    uniforms.uTanHalf.value = halfTan;
     // 四周留出浮尘飘散的空间；有 insets 时只用顶栏与输入条之间的高度。
     const reserved = insets?.() ?? { top: 0, bottom: 0 };
     const available = Math.max(80, height - reserved.top - reserved.bottom);
@@ -387,12 +420,55 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     uniforms.uMinSize.value = 1.5 * dpr;
   };
 
-  const rebuildGeometry = () => {
-    if (!source) return;
+  const clearContent = () => {
     core?.geometry.dispose();
     dust?.geometry.dispose();
     if (core) group.remove(core);
     if (dust) group.remove(dust);
+    core = dust = null;
+  };
+
+  // 两张半浮点纹理轮流读写压痕场，换内容时清零。
+  const allocateDent = (width: number, height: number) => {
+    targets?.forEach(target => target.dispose());
+    targets = [createTarget(width, height), createTarget(width, height)];
+    for (const target of targets) {
+      renderer.setRenderTarget(target);
+      renderer.clear();
+    }
+    renderer.setRenderTarget(null);
+    stampUniforms.uTexel.value.set(1 / width, 1 / height);
+    uniforms.uDentTexel.value.set(1.5 / width, 1.5 / height);
+    uniforms.uDent.value = targets[0].texture;
+  };
+
+  const setSculpture = () => {
+    clearContent();
+    mode = 'sculpture';
+    source = null;
+    photoTexture?.dispose();
+    heightTexture?.dispose();
+    photoTexture = heightTexture = null;
+    canvas.setAttribute('aria-label', '粒子雕塑。移动指针或按住拖动，会把粒子推开成一个小洞，离开后慢慢合上。');
+    const density = Math.round(params.density);
+    const built = buildSculpture(Math.round(density * density * 0.6), Math.round(density * density * 0.1));
+    contentSize.copy(built.size).addScalar(0.6);
+    formSpacings = built.spacings;
+    snapForm = true;
+    core = new THREE.Points(built.core, sculptureMaterial);
+    dust = new THREE.Points(built.dust, sculptureDustMaterial);
+    core.frustumCulled = dust.frustumCulled = false;
+    group.add(core, dust);
+    const aspect = Math.max(0.3, (container.clientWidth || 1) / (container.clientHeight || 1));
+    allocateDent(320, Math.round(Math.min(640, 320 / aspect)));
+    fitCamera();
+    onStats?.(built.count);
+  };
+
+  const rebuildGeometry = () => {
+    if (mode === 'sculpture') { setSculpture(); return; }
+    if (!source) return;
+    clearContent();
     const built = buildCore(source.aspect, Math.round(params.density));
     uniforms.uSpacing.value = uniforms.uWorld.value.x / built.cols;
     core = new THREE.Points(built.geometry, coreMaterial);
@@ -404,7 +480,9 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   };
 
   const setSource = (next: ReliefSource) => {
+    mode = 'photo';
     source = next;
+    canvas.setAttribute('aria-label', '照片粒子浮雕。移动指针或按住拖动，会把粒子推开成一个小洞，离开后慢慢合上。');
     photoTexture?.dispose();
     heightTexture?.dispose();
     photoTexture = new THREE.CanvasTexture(next.color);
@@ -421,19 +499,8 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     const longEdge = 5;
     uniforms.uWorld.value.set(next.aspect >= 1 ? longEdge : longEdge * next.aspect,
       next.aspect >= 1 ? longEdge / next.aspect : longEdge);
-
-    targets?.forEach(target => target.dispose());
-    const dentWidth = Math.round(next.aspect >= 1 ? 320 : 320 * next.aspect);
-    const dentHeight = Math.round(next.aspect >= 1 ? 320 / next.aspect : 320);
-    targets = [createTarget(dentWidth, dentHeight), createTarget(dentWidth, dentHeight)];
-    for (const target of targets) {
-      renderer.setRenderTarget(target);
-      renderer.clear();
-    }
-    renderer.setRenderTarget(null);
-    stampUniforms.uTexel.value.set(1 / dentWidth, 1 / dentHeight);
-    uniforms.uDentTexel.value.set(1.5 / dentWidth, 1.5 / dentHeight);
-    uniforms.uDent.value = targets[0].texture;
+    contentSize.copy(uniforms.uWorld.value);
+    allocateDent(Math.round(next.aspect >= 1 ? 320 : 320 * next.aspect), Math.round(next.aspect >= 1 ? 320 / next.aspect : 320));
     rebuildGeometry();
     fitCamera();
   };
@@ -442,7 +509,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     const densityChanged = Math.round(next.density) !== Math.round(params.density);
     params = { ...next };
     uniforms.uRelief.value = params.relief;
-    uniforms.uRadius.value = params.radius;
+    uniforms.uRadius.value = params.radius * HOLE_CORE;
     uniforms.uSize.value = params.size;
     uniforms.uSpread.value = params.spread;
     if (densityChanged) rebuildGeometry();
@@ -474,39 +541,41 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     pointerInside = true;
     placeRing(event);
   };
+  // 鼠标悬停只显示圆环；按住左键或手指按下才推开小洞，看画面时不会被误挖。
   const onPointerMove = (event: PointerEvent) => {
     if (!event.isPrimary) return;
     if (capturedPointer !== null && event.pointerId !== capturedPointer) return;
     updatePointer(event);
-    if (event.pointerType === 'mouse') {
-      pressing = true;
-      ring.classList.add('is-visible');
-    }
+    ring.classList.add('is-visible');
   };
   const onPointerDown = (event: PointerEvent) => {
-    if (!event.isPrimary || event.pointerType === 'mouse') return;
+    if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
     capturedPointer = event.pointerId;
     canvas.setPointerCapture(event.pointerId);
     updatePointer(event);
     pressing = true;
-    ring.classList.add('is-visible');
+    ring.classList.add('is-visible', 'is-pressing');
   };
   const release = () => {
     pressing = false;
     pointerInside = false;
     capturedPointer = null;
-    ring.classList.remove('is-visible');
+    ring.classList.remove('is-visible', 'is-pressing');
   };
-  const onPointerEnd = (event: PointerEvent) => {
-    if (event.pointerType === 'mouse' && event.type !== 'pointerleave') return;
+  const onPointerUp = (event: PointerEvent) => {
     if (capturedPointer !== null && event.pointerId !== capturedPointer) return;
-    release();
+    // 鼠标松开后仍停在画面上，圆环保留；手指抬起就离开了画面。
+    if (event.pointerType !== 'mouse') { release(); return; }
+    pressing = false;
+    capturedPointer = null;
+    ring.classList.remove('is-pressing');
   };
+  const onPointerLeave = () => { if (capturedPointer === null) release(); };
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointerup', onPointerEnd);
-  canvas.addEventListener('pointercancel', onPointerEnd);
-  canvas.addEventListener('pointerleave', onPointerEnd);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('pointerleave', onPointerLeave);
   window.addEventListener('blur', release);
 
   const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -521,34 +590,57 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   const animate = (now: number) => {
     const delta = previousTime === undefined ? 0 : Math.min((now - previousTime) / 1000, 0.05);
     previousTime = now;
-    if (!source || !targets) return;
+    if (!mode || !targets) return;
     if (frozen || motion.matches) Object.assign(currentVisual, targetVisual);
     else smoothVisual(currentVisual, targetVisual, delta);
     // 中性参数（0.5）与试验页的画面完全一致。
     if (!frozen && !motion.matches) time += delta * (0.35 + currentVisual.motion * 1.3);
     uniforms.uTime.value = time;
     const pulse = !frozen && !motion.matches && activity ? activityLevel(activity.current, now) : 0;
-    group.scale.setScalar((0.9 + currentVisual.dispersion * 0.2) * (1 + pulse * 0.035));
-    uniforms.uSpread.value = params.spread * (0.4 + currentVisual.dispersion * 1.2);
+    if (mode === 'photo') {
+      group.scale.setScalar((0.9 + currentVisual.dispersion * 0.2) * (1 + pulse * 0.035));
+      uniforms.uSpread.value = params.spread * (0.4 + currentVisual.dispersion * 1.2);
+    } else {
+      // 雕塑的形态由开放、张力、连贯、轻重四项连续改变；散开控制碎屑与光晕。
+      group.scale.setScalar(1 + pulse * 0.035);
+      uniforms.uSpread.value = 0.2 + currentVisual.dispersion * 1.2;
+      uniforms.uShape.value.set(currentVisual.openness, currentVisual.tension, currentVisual.coherence, currentVisual.weight);
+      // 形态按目标参数立刻开始流动，约两秒到位；首次显示、凝结和减少动态时直接到位。
+      const target = pickForm(targetVisual);
+      const blend = snapForm || frozen || motion.matches ? 1 : 1 - Math.exp(-delta * 1.6);
+      snapForm = false;
+      let spacing = 0;
+      for (let k = 0; k < formWeights.length; k++) {
+        formWeights[k] += ((k === target ? 1 : 0) - formWeights[k]) * blend;
+        if (Math.abs(formWeights[k] - (k === target ? 1 : 0)) < 1e-3) formWeights[k] = k === target ? 1 : 0;
+        spacing += formWeights[k] * formSpacings[k];
+      }
+      uniforms.uFormA.value.set(formWeights[0], formWeights[1], formWeights[2], formWeights[3]);
+      uniforms.uFormB.value = formWeights[4];
+      uniforms.uSpacing.value = spacing;
+    }
     uniforms.uLight.value = (0.8 + currentVisual.luminosity * 0.4) * (1 + pulse * 0.16);
     const temperature = (currentVisual.warmth - 0.5) * 0.44;
     uniforms.uTint.value.set(1 + temperature, 1, 1 - temperature);
 
-    group.rotation.set(
-      -0.06 + Math.sin(time * 0.17) * 0.025 + tilt.y,
-      Math.sin(time * 0.2) * 0.07 + tilt.x,
-      0,
-    );
+    // 照片只轻微摆动；雕塑转得更多，让体积和暗缝随角度显出来。
+    if (mode === 'photo') group.rotation.set(-0.06 + Math.sin(time * 0.17) * 0.025 + tilt.y, Math.sin(time * 0.2) * 0.07 + tilt.x, 0);
+    else group.rotation.set(0.12 + Math.sin(time * 0.09) * 0.05 + tilt.y, Math.sin(time * 0.12) * 0.4 + tilt.x * 1.2, -0.06);
     group.updateMatrixWorld();
 
     let onSurface = false;
     if (pointerInside) {
-      raycaster.setFromCamera(pointer, camera);
-      localRay.copy(raycaster.ray).applyMatrix4(inverse.copy(group.matrixWorld).invert());
-      if (localRay.intersectPlane(plane, hit)) {
-        const world = uniforms.uWorld.value;
-        targetUv.set(hit.x / world.x + 0.5, hit.y / world.y + 0.5);
-        onSurface = targetUv.x > -0.1 && targetUv.x < 1.1 && targetUv.y > -0.1 && targetUv.y < 1.1;
+      if (mode === 'sculpture') {
+        targetUv.set((pointer.x + 1) / 2, (pointer.y + 1) / 2);
+        onSurface = true;
+      } else {
+        raycaster.setFromCamera(pointer, camera);
+        localRay.copy(raycaster.ray).applyMatrix4(inverse.copy(group.matrixWorld).invert());
+        if (localRay.intersectPlane(plane, hit)) {
+          const world = uniforms.uWorld.value;
+          targetUv.set(hit.x / world.x + 0.5, hit.y / world.y + 0.5);
+          onSurface = targetUv.x > -0.1 && targetUv.x < 1.1 && targetUv.y > -0.1 && targetUv.y < 1.1;
+        }
       }
       // 视角轻微朝向指针，让压痕的深度更容易读出来。
       const follow = 1 - Math.exp(-delta * 3);
@@ -562,6 +654,10 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     strength += ((pressing && onSurface ? 1 : 0) - strength) * (1 - Math.exp(-delta * 8));
 
     stampUniforms.uPrevious.value = targets[0].texture;
+    stampUniforms.uWorld.value.copy(mode === 'photo' ? uniforms.uWorld.value : uniforms.uScreen.value);
+    // 竖屏手机上雕塑按宽度缩小，屏幕孔也跟着缩小，比例与桌面一致。
+    uniforms.uScreenRadius.value = params.radius * HOLE_CORE * SCREEN_RADIUS_PER_WORLD * THREE.MathUtils.clamp(camera.aspect, 0.6, 1);
+    stampUniforms.uRadius.value = mode === 'photo' ? uniforms.uRadius.value : uniforms.uScreenRadius.value;
     stampUniforms.uFrom.value.copy(previousUv);
     stampUniforms.uTo.value.copy(currentUv);
     stampUniforms.uStrength.value = strength;
@@ -590,7 +686,8 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   const onContextRestored = () => {
     contextLost = false;
     onError?.(null);
-    if (source) setSource(source);
+    if (mode === 'sculpture') setSculpture();
+    else if (source) setSource(source);
     syncLoop();
   };
   document.addEventListener('visibilitychange', syncLoop);
@@ -601,6 +698,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
 
   return {
     setSource,
+    setSculpture,
     setParams,
     setVisual(visual) { targetVisual = { ...visual }; },
     setFrozen(next, phase) {
@@ -613,7 +711,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     },
     refit: fitCamera,
     capture() {
-      if (contextLost || !source) throw new Error('画面还没有准备好，请稍等再凝结。');
+      if (contextLost || !mode) throw new Error('画面还没有准备好，请稍等再凝结。');
       // 复制前立即绘制一帧：WebGL 默认不保留上一帧的画面。
       renderer.render(scene, camera);
       const preview = document.createElement('canvas');
@@ -636,9 +734,9 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
       resizeObserver.disconnect();
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerdown', onPointerDown);
-      canvas.removeEventListener('pointerup', onPointerEnd);
-      canvas.removeEventListener('pointercancel', onPointerEnd);
-      canvas.removeEventListener('pointerleave', onPointerEnd);
+      canvas.removeEventListener('pointerup', onPointerUp);
+      canvas.removeEventListener('pointercancel', release);
+      canvas.removeEventListener('pointerleave', onPointerLeave);
       canvas.removeEventListener('webglcontextlost', onContextLost);
       canvas.removeEventListener('webglcontextrestored', onContextRestored);
       window.removeEventListener('blur', release);
@@ -647,6 +745,8 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
       dust?.geometry.dispose();
       coreMaterial.dispose();
       dustMaterial.dispose();
+      sculptureMaterial.dispose();
+      sculptureDustMaterial.dispose();
       stampMaterial.dispose();
       stampQuad.geometry.dispose();
       photoTexture?.dispose();
