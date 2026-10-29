@@ -24,6 +24,8 @@
 | [ROADMAP](docs/ROADMAP.md) | 全屏界面、照片浮雕、国内 AI 及后续任务的验收条件 |
 | [API_SETUP](docs/API_SETUP.md) | 百炼开通、填写本机密钥、重启与联调步骤 |
 | [DEPLOY](docs/DEPLOY.md) | 比赛版 HTTPS 部署：香港服务器、Caddy、线上启动与更新 |
+| [PROJECT_INTRO](docs/PROJECT_INTRO.md) | 比赛提交用的作品说明 |
+| [DEMO_SCRIPT](docs/DEMO_SCRIPT.md) | 3 分钟演示视频的分镜脚本 |
 | [AGENTS](AGENTS.md) | 供 CLI 助手读取的协作约定 |
 
 ## 从命令行开始
