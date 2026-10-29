@@ -224,7 +224,8 @@ export function createApiHandler({
           response_format: naming ? TITLE_RESPONSE_FORMAT : sculpture ? SCULPTURE_RESPONSE_FORMAT : ART_RESPONSE_FORMAT,
           stream: !sculpture && !naming,
           enable_thinking: false,
-          max_tokens: naming ? 200 : sculpture ? 350 : 900,
+          // 用户提问时回复可以到两三百字，再加作品参数的 JSON，留足余量免得被截断。
+          max_tokens: naming ? 200 : sculpture ? 350 : 1400,
         }),
         signal: controller.signal,
       });
