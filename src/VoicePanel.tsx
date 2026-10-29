@@ -4,6 +4,7 @@ import { VoiceSession } from './voice/session';
 import type { VoiceEvent, VoiceState } from './voice/session';
 import { VoiceSculptor } from './voice/sculptor';
 import type { VisualState } from './visual';
+import type { SculptureForm } from './imagery';
 import ReplyCard from './ReplyCard';
 import { Icon } from './icons';
 import type { TranscriptLine } from './title';
@@ -15,9 +16,9 @@ const statusText: Record<VoiceState, string> = {
 };
 
 export type VoiceSessionFactory = (worklet: string, onEvent: (event: VoiceEvent) => void) => VoiceSession;
-export default function VoicePanel({ open, onClose, onCondense, visual, onVisual, onActivity, onStatus, onTranscript, sessionFactory }: {
-  open: boolean; onClose: () => void; onCondense: () => void; visual: VisualState;
-  onVisual: (visual: VisualState) => void; onActivity: (level: number) => void;
+export default function VoicePanel({ open, onClose, onCondense, visual, form = null, onVisual, onActivity, onStatus, onTranscript, sessionFactory }: {
+  open: boolean; onClose: () => void; onCondense: () => void; visual: VisualState; form?: SculptureForm | null;
+  onVisual: (visual: VisualState, form: SculptureForm | null) => void; onActivity: (level: number) => void;
   onStatus: (state: VoiceState | null) => void; onTranscript: (lines: TranscriptLine[]) => void; sessionFactory?: VoiceSessionFactory;
 }) {
   const [state, setState] = useState<VoiceState | null>(null);
@@ -27,6 +28,7 @@ export default function VoicePanel({ open, onClose, onCondense, visual, onVisual
   const session = useRef<VoiceSession | null>(null);
   const wave = useRef<HTMLSpanElement>(null);
   const visualRef = useRef(visual); visualRef.current = visual;
+  const formRef = useRef(form); formRef.current = form;
   const callbacks = useRef({ onVisual, onActivity, onStatus }); callbacks.current = { onVisual, onActivity, onStatus };
   const sculptor = useRef<VoiceSculptor | null>(null);
   const [artMessage, setArtMessage] = useState('');
@@ -52,8 +54,9 @@ export default function VoicePanel({ open, onClose, onCondense, visual, onVisual
 
   const start = () => {
     stop(); setMessage(''); setError(''); setTurns([]); setState('requesting');
-    sculptor.current = new VoiceSculptor(() => visualRef.current, value => callbacks.current.onVisual(value),
+    sculptor.current = new VoiceSculptor(() => visualRef.current, (value, chosen) => callbacks.current.onVisual(value, chosen),
       (text, retry) => { setArtMessage(text); setRetryArt(retry); });
+    sculptor.current.getForm = () => formRef.current;
     const receive = (event: VoiceEvent) => {
       if (session.current !== next) return;
       if (event.type === 'level') {

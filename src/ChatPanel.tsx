@@ -3,6 +3,7 @@ import { getChatStatus, streamChat } from './chat';
 import type { ChatMessage, ChatStatus } from './chat';
 import type { PhotoContext } from './photoAttachment';
 import type { VisualState } from './visual';
+import type { SculptureForm } from './imagery';
 import ReplyCard from './ReplyCard';
 import type { ReplyLine } from './ReplyCard';
 import { Icon } from './icons';
@@ -14,9 +15,9 @@ type Turn = {
 };
 export type ChatLink = 'checking' | 'ready' | 'offline';
 
-export default function ChatPanel({ open, photo, photoBusy, visual, onVisual, onChoosePhoto, onVoice, onCondense, onActivity, onStatus, onTranscript }: {
+export default function ChatPanel({ open, photo, photoBusy, visual, form = null, onVisual, onChoosePhoto, onVoice, onCondense, onActivity, onStatus, onTranscript }: {
   open: boolean; photo: PhotoContext | null; photoBusy: boolean;
-  visual: VisualState; onVisual: (visual: VisualState) => void; onChoosePhoto: () => void; onVoice: () => void;
+  visual: VisualState; form?: SculptureForm | null; onVisual: (visual: VisualState, form: SculptureForm | null) => void; onChoosePhoto: () => void; onVoice: () => void;
   onCondense: () => void; onActivity: (level: number) => void; onStatus: (link: ChatLink, busy: boolean) => void;
   onTranscript: (lines: TranscriptLine[]) => void;
 }) {
@@ -109,9 +110,9 @@ export default function ChatPanel({ open, photo, photoBusy, visual, onVisual, on
     };
     try {
       const result = await streamChat([...history, { role: 'user', content: input }], controller.signal,
-        (output) => update({ output }), { image: photo?.image, visual });
+        (output) => update({ output }), { image: photo?.image, visual, form });
       if (serialRef.current === id) {
-        if (result.visual) onVisual(result.visual);
+        if (result.visual) onVisual(result.visual, result.form ?? null);
         update({ state: 'done', visualNote: result.visual ? '画面已随这次表达变化' : result.visualWarning });
       }
     } catch (error) {

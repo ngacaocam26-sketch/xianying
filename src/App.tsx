@@ -21,6 +21,10 @@ import type { GalleryRepository } from './gallery';
 import GalleryPanel from './GalleryPanel';
 import { nameMoment } from './title';
 import type { TranscriptLine } from './title';
+import { describeVisual } from './reveal';
+import { pickForm, SCULPTURE_FORMS } from './relief/sculpture';
+import { imageLabel } from './imagery';
+import type { SculptureForm } from './imagery';
 
 type ChatState = { link: ChatLink; busy: boolean };
 
@@ -43,6 +47,11 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [photoContext, setPhotoContext] = useState<PhotoContext | null>(null);
   const [visual, setVisual] = useState<VisualState>({ ...DEFAULT_VISUAL });
+  // 显影时刻：AI 给出新参数时画面散开再凝聚，并短暂浮出转译后的造型用词。
+  const [developId, setDevelopId] = useState(0);
+  const [caption, setCaption] = useState<{ id: number; visual: VisualState; name: string } | null>(null);
+  // 大模型为默认雕塑选的意象和名字；null 时按参数规则选形态（默认状态、旧作品）。
+  const [form, setForm] = useState<SculptureForm | null>(null);
   const [snapshot, setSnapshot] = useState<SceneSnapshot | null>(null);
   const [artwork, setArtwork] = useState<Artwork | null>(null);
   const [saved, setSaved] = useState(false);
@@ -88,8 +97,24 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
     if (veilTimer.current) clearTimeout(veilTimer.current);
   }, []);
   useEffect(() => {
+    if (!caption) return;
+    const timer = window.setTimeout(() => setCaption(null), 6400);
+    return () => window.clearTimeout(timer);
+  }, [caption]);
+  useEffect(() => {
     if (artwork && !galleryOpen && !veiled) document.getElementById('artwork-title')?.focus({ preventScroll: true });
   }, [artwork?.id, galleryOpen, veiled]);
+
+  // 只有 AI 回复带来的参数触发显影；打开回廊、换照片、返回暗房都直接到位。
+  // 模型这次没给出合格的意象时保留当前意象，只更新参数。
+  const revealVisual = (next: VisualState, chosen: SculptureForm | null) => {
+    const shown = chosen ?? form;
+    setVisual(next);
+    if (chosen) setForm(chosen);
+    setDevelopId(id => id + 1);
+    const name = shown?.name ?? imageLabel(SCULPTURE_FORMS[pickForm(next)]);
+    setCaption(previous => ({ id: (previous?.id ?? 0) + 1, visual: next, name }));
+  };
 
   const selectPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
@@ -123,6 +148,7 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
     if (disperseTimer.current) clearTimeout(disperseTimer.current);
     if (veilTimer.current) clearTimeout(veilTimer.current);
     setVeiled(false); setDispersing(false); setGalleryOpen(false); setSnapshot(null); setArtwork(null); setSaved(false); setSaveError('');
+    setCaption(null); setForm(null);
     setExpressionId(id => id + 1);
     photoRequestRef.current++;
     setPhotoLoading(false);
@@ -143,7 +169,7 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
       if (!captured) throw new Error('画面还没准备好，请稍等再凝结。');
       const work = makeArtwork(captured.scene, captured.thumbnail);
       generation.current++; photoRequestRef.current++;
-      setVoiceOpen(false); setNotice(null);
+      setVoiceOpen(false); setNotice(null); setCaption(null);
       setArtwork(work); setSnapshot(work.scene); setVisual(resolveVisual(work.scene.visual)); setSaved(false); setSaveError('');
       titleEdited.current = false;
       requestName(work.id);
@@ -203,7 +229,8 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
   };
   const openArtwork = (work: Artwork) => {
     generation.current++; photoRequestRef.current++; setExpressionId(id => id + 1); stopNaming();
-    setPhotoLoading(false); setPhoto(work.scene.photo); setVisual(resolveVisual(work.scene.visual));
+    setPhotoLoading(false); setPhoto(work.scene.photo); setVisual(resolveVisual(work.scene.visual)); setCaption(null);
+    setForm(work.scene.form ?? null);
     const restored = work.scene.relief ?? null;
     setRelief(restored);
     // 浮雕作品保存的照片就是当初的缩略图，继续表达时可以直接再交给 AI 看。
@@ -242,8 +269,12 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
       <main className="scene-stage" ref={stageRef} aria-label="显影互动暗房" aria-hidden={galleryOpen}>
         {photo || snapshot?.kind === 'nebula'
           ? <ParticleScene ref={sceneRef} photo={photo} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} />
-          : <ReliefView ref={sceneRef} photo={relief} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} />}
+          : <ReliefView ref={sceneRef} photo={relief} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} form={form} develop={developId} />}
       </main>
+      {caption && expressing && <div key={caption.id} className="reveal-caption" role="status" aria-live="polite">
+        {!photo && !relief && <p className="reveal-form">{caption.name}</p>}
+        <p className="reveal-words">{describeVisual(caption.visual).join(' · ')}</p>
+      </div>}
       {veiled && <div className="condense-veil" aria-hidden="true"><p>正在凝结</p></div>}
       <p className={`entry-notice${notice ? ' is-visible' : ''}`} role="status" aria-live="polite" aria-atomic="true">{notice?.text}</p>
 
@@ -252,11 +283,11 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
         aria-label="选择本地照片" onChange={selectPhoto} />
       <div className="dock-area" hidden={!expressing}>
         <ChatPanel key={`${expressionId}:${photoContext?.id ?? 'text'}`} open={expressing && !voiceOpen} photo={photoContext} photoBusy={photoLoading}
-          visual={visual} onVisual={setVisual} onCondense={condense} onActivity={indicateActivity}
+          visual={visual} form={form} onVisual={revealVisual} onCondense={condense} onActivity={indicateActivity}
           onChoosePhoto={() => photoInputRef.current?.click()} onVoice={() => { setNotice(null); setVoiceOpen(true); }}
           onStatus={(link, busy) => setChatState(previous => previous.link === link && previous.busy === busy ? previous : { link, busy })}
           onTranscript={lines => { transcriptRef.current.text = lines; }} />
-        <VoicePanel key={expressionId} open={expressing && voiceOpen} visual={visual} onVisual={setVisual} onActivity={indicateActivity}
+        <VoicePanel key={expressionId} open={expressing && voiceOpen} visual={visual} form={form} onVisual={revealVisual} onActivity={indicateActivity}
           onStatus={setVoiceState} onTranscript={lines => { transcriptRef.current.voice = lines; }} sessionFactory={voiceSessionFactory} onCondense={condense} onClose={() => {
             setVoiceOpen(false);
             requestAnimationFrame(() => document.getElementById('chat-input')?.focus());
@@ -296,7 +327,7 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
           <h2 id="info-title">显影 <span lang="en">XIAN YING</span></h2>
           <p>把一次情绪，变成可以触碰的粒子雕塑。</p>
           <p>在底部写一句话、点麦克风直接说，或点相机投一张本地照片。按住鼠标或手指在画面上拖动，可以推开一个小洞，松开后慢慢合上。「凝结此刻」固定当前的形态，可以留在回廊，也可以让它散去。</p>
-          <p className="info-availability">文字及最近 5 轮对话、主动发送的照片缩略图交给阿里云百炼；语音及最近几句转写用于语音交流和作品转译，不保存录音，每次最长 5 分钟。画面变化来自 AI 给出的作品参数，不是心理测评。两种对话历史暂时独立，作品状态可以延续；刷新即清空对话。凝结时，最近 12 句文字或语音转写会再交给百炼一次，用来起标题和写一句总结；不发送照片，标题可以自己改。</p>
+          <p className="info-availability">文字及最近 5 轮对话、主动发送的照片缩略图交给阿里云百炼；语音及最近几句转写用于语音交流和作品转译，不保存录音，每次最长 5 分钟。画面变化来自 AI 给出的作品参数，不是心理测评；没有照片时，AI 还会从火焰、雨、海浪、漩涡、花开等 12 种意象里为这一刻挑一个并起名；每次画面先散开再凝聚成新的样子，并短暂显示这个名字和造型用词（如「内收 · 偏冷」），描述的是作品，不是对你的判断。两种对话历史暂时独立，作品状态可以延续；刷新即清空对话。凝结时，最近 12 句文字或语音转写会再交给百炼一次，用来起标题和写一句总结；不发送照片，标题可以自己改。</p>
           <p className="info-availability">存档含凝结的形态参数、预览图、标题与一句总结；照片作品另存一张缩小重编码的照片（最长边 768，不含原文件和拍摄信息），用来重新显影。不含聊天和录音，只属于当前浏览器和地址，清除站点数据会丢失。散去不改变回廊记录，移除可以恢复。</p>
         </div>
       </dialog>

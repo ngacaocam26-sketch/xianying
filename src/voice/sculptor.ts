@@ -1,14 +1,20 @@
 import { validateVisual } from '../visual.ts';
 import type { VisualState } from '../visual.ts';
+import { validateForm } from '../imagery.ts';
+import type { SculptureForm } from '../imagery.ts';
 
-export async function translateSpeech(utterances: string[], visual: VisualState, signal: AbortSignal): Promise<VisualState> {
+export type Translation = { visual: VisualState; form: SculptureForm | null };
+
+export async function translateSpeech(utterances: string[], visual: VisualState, signal: AbortSignal,
+  form: SculptureForm | null = null): Promise<Translation> {
   const response = await fetch('/api/sculpture', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ utterances, visual }), signal });
+    body: JSON.stringify({ utterances, visual, form }), signal });
   const result = await response.json().catch(() => null);
   if (!response.ok) throw new Error(result?.message || '这次画面暂时没有显影，仍可以继续说话。');
   const valid = validateVisual(result?.visual, false);
   if (!valid) throw new Error('这次画面暂时保留，可以继续说话或重试显影。');
-  return valid;
+  const chosen = validateForm(result?.form);
+  return { visual: valid, form: chosen ? { ...chosen, variant: Math.random() } : null };
 }
 
 export class VoiceSculptor {
@@ -17,10 +23,11 @@ export class VoiceSculptor {
   serial = 0;
   controller: AbortController | null = null;
   getVisual: () => VisualState;
-  apply: (visual: VisualState) => void;
+  getForm: () => SculptureForm | null = () => null;
+  apply: (visual: VisualState, form: SculptureForm | null) => void;
   status: (message: string, retry: boolean) => void;
   translate: typeof translateSpeech;
-  constructor(getVisual: () => VisualState, apply: (visual: VisualState) => void,
+  constructor(getVisual: () => VisualState, apply: (visual: VisualState, form: SculptureForm | null) => void,
     status: (message: string, retry: boolean) => void, translate = translateSpeech) {
     this.getVisual = getVisual; this.apply = apply; this.status = status; this.translate = translate;
   }
@@ -40,9 +47,10 @@ export class VoiceSculptor {
     const timer = setTimeout(() => controller.abort(), 15000);
     this.status('画面正在随这段表达显影…', false);
     try {
-      const visual = await this.translate(this.words.filter(word => word.text).map(word => word.text), this.getVisual(), controller.signal);
+      const result = await this.translate(this.words.filter(word => word.text).map(word => word.text), this.getVisual(),
+        controller.signal, this.getForm());
       if (serial !== this.serial || controller.signal.aborted) return;
-      this.apply(visual); this.status('这段表达已进入作品。', false);
+      this.apply(result.visual, result.form); this.status('这段表达已进入作品。', false);
     } catch (error) {
       if (serial === this.serial) this.status(controller.signal.aborted ? '显影等待较久，画面暂时保留，可以重试。' :
         error instanceof Error ? error.message : '画面暂时保留，可以重试。', true);

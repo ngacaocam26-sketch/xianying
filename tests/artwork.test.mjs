@@ -96,3 +96,16 @@ test('optional AI summary is kept on works and cards, bounded, and absent on old
   assert.equal('summary' in artworkCard(validateArtwork(base())), false);
   for (const summary of ['', '   ', 'x'.repeat(121), 42]) assert.throws(() => validateArtwork({ ...base(), summary }));
 });
+
+test('a sculpture keeps the imagery the model chose; older sculptures and photos never carry one', () => {
+  const visual = { dispersion: 0.4, motion: 0.6, warmth: 0.8, openness: 0.5, tension: 0.7, coherence: 0.5, weight: 0.5, luminosity: 0.7 };
+  const scene = { version: 3, kind: 'sculpture', seed: NEBULA_SEED, phase: 2, visual, photo: null };
+  const form = { image: 'flame', name: '压着的火', variant: 0.42 };
+  const work = validateArtwork({ ...base(), version: 3, scene: { ...scene, form } });
+  assert.deepEqual(validateArtwork(structuredClone(work)).scene.form, form);
+  assert.equal('form' in validateArtwork({ ...base(), version: 3, scene }).scene, false);
+  for (const bad of [{ image: 'unknown', name: 'x', variant: 0 }, null, 'flame']) {
+    assert.throws(() => validateArtwork({ ...base(), version: 3, scene: { ...scene, form: bad } }));
+  }
+  assert.throws(() => validateArtwork({ ...reliefWork(), scene: { ...reliefWork().scene, form } }));
+});

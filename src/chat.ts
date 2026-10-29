@@ -1,10 +1,13 @@
 import { validateVisual } from './visual.ts';
 import type { VisualState } from './visual';
 import type { PhotoAttachment } from './photoAttachment';
+import { validateForm } from './imagery.ts';
+import type { SculptureForm } from './imagery.ts';
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 export type ChatStatus = { configured: boolean; provider: string; model: string };
-export type ChatResult = { visual: VisualState | null; visualWarning?: string };
+// form 是大模型挑的意象和名字；variant 由前端随机生成，同一意象每次长得略有不同。
+export type ChatResult = { visual: VisualState | null; form?: SculptureForm | null; visualWarning?: string };
 
 export async function getChatStatus(signal: AbortSignal): Promise<ChatStatus> {
   const response = await fetch('/api/status', { signal, cache: 'no-store' });
@@ -18,7 +21,7 @@ export async function streamChat(
   messages: ChatMessage[],
   signal: AbortSignal,
   onText: (text: string) => void,
-  context: { image?: PhotoAttachment; visual?: VisualState } = {},
+  context: { image?: PhotoAttachment; visual?: VisualState; form?: SculptureForm | null } = {},
 ): Promise<ChatResult> {
   const response = await fetch('/api/chat', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -44,7 +47,8 @@ export async function streamChat(
     } else if (event.type === 'done') {
       completed = true;
       const visual = validateVisual(event.visual);
-      result = { visual, visualWarning: visual ? undefined :
+      const form = validateForm(event.form);
+      result = { visual, form: form ? { ...form, variant: Math.random() } : null, visualWarning: visual ? undefined :
         typeof event.visualWarning === 'string' ? event.visualWarning : '回复已收到，画面暂时保留。' };
     }
     else if (event.type === 'error') throw new Error(event.message || '连接中断了，可以重试。');

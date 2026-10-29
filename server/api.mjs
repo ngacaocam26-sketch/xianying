@@ -1,5 +1,5 @@
 import { SYSTEM_PROMPT, SCULPTURE_PROMPT, TITLE_PROMPT } from './prompt.mjs';
-import { ART_RESPONSE_FORMAT, SCULPTURE_RESPONSE_FORMAT, TITLE_RESPONSE_FORMAT, partialReply, parseArtResponse, parseTitle } from './artResponse.mjs';
+import { ART_RESPONSE_FORMAT, SCULPTURE_RESPONSE_FORMAT, TITLE_RESPONSE_FORMAT, partialReply, parseArtResponse, parseForm, parseTitle } from './artResponse.mjs';
 import { DEFAULT_VISUAL, validateVisual } from '../src/visual.ts';
 
 class ApiError extends Error {
@@ -183,6 +183,7 @@ export function createApiHandler({
       const messages = naming ? validateTranscript(body) : sculpture ? validateUtterances(body) : validateMessages(body);
       const image = validateImage(body.image);
       const currentVisual = validateVisual(body.visual) ?? DEFAULT_VISUAL;
+      const currentForm = parseForm(body.form);
       if (image) {
         const latest = messages.at(-1);
         latest.content = [
@@ -206,7 +207,8 @@ export function createApiHandler({
         body: JSON.stringify({
           model: config.model,
           messages: [{ role: 'system', content: naming ? TITLE_PROMPT
-            : (sculpture ? SCULPTURE_PROMPT : SYSTEM_PROMPT) + '\n当前作品参数：' + JSON.stringify(currentVisual) }, ...messages],
+            : (sculpture ? SCULPTURE_PROMPT : SYSTEM_PROMPT) + '\n当前作品参数：' + JSON.stringify(currentVisual)
+              + '\n当前意象：' + (currentForm ? JSON.stringify(currentForm) : '尚未选择') }, ...messages],
           response_format: naming ? TITLE_RESPONSE_FORMAT : sculpture ? SCULPTURE_RESPONSE_FORMAT : ART_RESPONSE_FORMAT,
           stream: !sculpture && !naming,
           enable_thinking: false,
@@ -230,9 +232,10 @@ export function createApiHandler({
         const choice = result.choices?.[0];
         const content = choice?.message?.content;
         if (choice?.finish_reason !== 'stop' || typeof content !== 'string' || content.length > 8000) throw new Error('Incomplete sculpture');
-        const visual = validateVisual(JSON.parse(content).visual, false);
+        const parsed = JSON.parse(content);
+        const visual = validateVisual(parsed.visual, false);
         if (!visual) throw new Error('Invalid sculpture');
-        json(200, { visual }); return;
+        json(200, { visual, form: parseForm(parsed.form) }); return;
       }
       if (!upstream.body) throw new Error('Empty upstream body');
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Accel-Buffering': 'no' });
@@ -263,7 +266,7 @@ export function createApiHandler({
       const result = parseArtResponse(received);
       if (!result.reply.startsWith(sentReply)) throw new Error('Invalid final reply');
       if (result.reply.length > sentReply.length) emit({ type: 'delta', text: result.reply.slice(sentReply.length) });
-      emit({ type: 'done', visual: result.visual,
+      emit({ type: 'done', visual: result.visual, form: result.form,
         visualWarning: result.visual ? undefined : '回复已收到，画面暂时保留。' });
       res.end();
     } catch (error) {

@@ -4,7 +4,9 @@ import type { VisualState } from '../visual';
 import { activityLevel } from '../emotionShape';
 import type { ActivitySignal } from '../emotionShape';
 import { seededRandom } from './random';
-import { buildSculpture, pickForm, sculptureCoreVertex, sculptureDustVertex } from './sculpture';
+import { buildSculpture, developCurve, formBehavior, pickForm, sculptureCoreVertex, sculptureDustVertex } from './sculpture';
+import { imageIndex } from '../imagery';
+import type { ImageId } from '../imagery';
 
 // 雕塑的小洞以屏幕为准：试验页的孔半径 0.24（照片宽 5）约等于画面高度的 1/20。
 const SCREEN_RADIUS_PER_WORLD = 0.42;
@@ -45,6 +47,10 @@ export interface ReliefScene {
   setParams: (params: ReliefParams) => void;
   // 作品参数只改变光感、冷暖、流速和散开程度，照片主体保持可辨认。
   setVisual: (visual: VisualState) => void;
+  // 大模型选出的意象；null 时按参数规则从最早的五种形态里选（旧作品与默认状态）。
+  setForm: (form: { image: ImageId; variant: number } | null) => void;
+  // AI 给出新参数后调用：雕塑先散成雾再凝聚成新形态，照片边缘散开再收回。
+  develop: () => void;
   // 凝结后时间停住，仍可以拨动；phase 用于从回廊恢复同一刻。
   setFrozen: (frozen: boolean, phase?: number) => void;
   setActive: (active: boolean) => void;
@@ -335,8 +341,13 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     uLight: { value: 1 },
     uTint: { value: new THREE.Vector3(1, 1, 1) },
     uShape: { value: new THREE.Vector4(0.5, 0.5, 0.5, 0.5) },
-    uFormA: { value: new THREE.Vector4(1, 0, 0, 0) },
-    uFormB: { value: 0 },
+    uMix: { value: 0 },
+    uBehaviorA: { value: 0 },
+    uBehaviorB: { value: 0 },
+    uVariantA: { value: new THREE.Vector4(0, 1, 1, 0) },
+    uVariantB: { value: new THREE.Vector4(0, 1, 1, 0) },
+    uHeat: { value: 0 },
+    uDevelop: { value: 0 },
     uScreen: { value: new THREE.Vector2(2, 2) },
     uScreenRadius: { value: params.radius * SCREEN_RADIUS_PER_WORLD },
     uTanHalf: { value: 1 },
@@ -382,9 +393,12 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
 
   let mode: 'photo' | 'sculpture' | null = null;
   // 五种雕塑形态的当前权重与各自的颗粒间距；权重平滑地流向目标形态。
-  const formWeights = [1, 0, 0, 0, 0];
-  let formSpacings = [0.01, 0.01, 0.01, 0.01, 0.01];
-  let snapForm = true;
+  // A、B 两个槽位里装着的形态；active 是正在显示（或正在流向）的槽。
+  let sculpture: ReturnType<typeof buildSculpture> | null = null;
+  const slots = { A: { index: -1, variant: 0, spacing: 0.01 }, B: { index: -1, variant: 0, spacing: 0.01 } };
+  let activeSlot: 'A' | 'B' = 'A';
+  let mixAnimation: { from: number; to: number; start: number } | null = null;
+  let chosenForm: { index: number; variant: number } | null = null;
   let source: ReliefSource | null = null;
   // 取景依据的内容尺寸：照片平面或雕塑包围盒。
   const contentSize = new THREE.Vector2(5, 3.3);
@@ -442,6 +456,23 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     uniforms.uDent.value = targets[0].texture;
   };
 
+  // 想显示的形态：大模型选的意象；没有时按参数规则选（旧作品、默认状态）。
+  const wantedForm = () => chosenForm ?? { index: pickForm(targetVisual), variant: 0 };
+  // 把形态写进另一个槽位并流过去；variant 让同一意象每次转角、比例与动态相位略有不同。
+  const showForm = (form: { index: number; variant: number }, animate: boolean) => {
+    if (!sculpture) return;
+    const next = activeSlot === 'A' ? 'B' : 'A';
+    const v = form.variant;
+    slots[next] = { index: form.index, variant: v, spacing: sculpture.load(next, form.index) };
+    uniforms[`uBehavior${next}`].value = formBehavior(form.index);
+    uniforms[`uVariant${next}`].value.set(v ? (v - 0.5) * 1.1 : 0, v ? 0.92 + 0.16 * ((v * 7.31) % 1) : 1,
+      v ? 0.92 + 0.16 * ((v * 3.17) % 1) : 1, v);
+    activeSlot = next;
+    const to = next === 'B' ? 1 : 0;
+    if (animate) mixAnimation = { from: uniforms.uMix.value, to, start: performance.now() };
+    else { uniforms.uMix.value = to; mixAnimation = null; }
+  };
+
   const setSculpture = () => {
     clearContent();
     mode = 'sculpture';
@@ -452,9 +483,11 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     canvas.setAttribute('aria-label', '粒子雕塑。移动指针或按住拖动，会把粒子推开成一个小洞，离开后慢慢合上。');
     const density = Math.round(params.density);
     const built = buildSculpture(Math.round(density * density * 0.6), Math.round(density * density * 0.1));
+    sculpture = built;
     contentSize.copy(built.size).addScalar(0.6);
-    formSpacings = built.spacings;
-    snapForm = true;
+    slots.A.index = slots.B.index = -1;
+    activeSlot = 'B';
+    showForm(wantedForm(), false);
     core = new THREE.Points(built.core, sculptureMaterial);
     dust = new THREE.Points(built.dust, sculptureDustMaterial);
     core.frustumCulled = dust.frustumCulled = false;
@@ -586,6 +619,8 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   let frozen = false;
   const currentVisual: VisualState = { ...DEFAULT_VISUAL };
   let targetVisual: VisualState = { ...DEFAULT_VISUAL };
+  // 正在进行的显影的开始时刻。
+  let developStart: number | null = null;
 
   const animate = (now: number) => {
     const delta = previousTime === undefined ? 0 : Math.min((now - previousTime) / 1000, 0.05);
@@ -597,29 +632,38 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     if (!frozen && !motion.matches) time += delta * (0.35 + currentVisual.motion * 1.3);
     uniforms.uTime.value = time;
     const pulse = !frozen && !motion.matches && activity ? activityLevel(activity.current, now) : 0;
+    if (frozen || motion.matches) developStart = null;
+    const developing = developStart === null ? null : developCurve((now - developStart) / 1000);
+    if (developing?.done) developStart = null;
+    const fog = developing?.fog ?? 0, glow = developing?.glow ?? 0;
+    uniforms.uDevelop.value = mode === 'sculpture' ? fog : 0;
     if (mode === 'photo') {
-      group.scale.setScalar((0.9 + currentVisual.dispersion * 0.2) * (1 + pulse * 0.035));
-      uniforms.uSpread.value = params.spread * (0.4 + currentVisual.dispersion * 1.2);
+      group.scale.setScalar((0.9 + currentVisual.dispersion * 0.2) * (1 + pulse * 0.035) * (1 - fog * 0.04));
+      // 照片保持主体可辨认：只让边缘的细尘大幅散开，再收回。
+      uniforms.uSpread.value = params.spread * (0.4 + currentVisual.dispersion * 1.2) * (1 + fog * 2.2);
     } else {
       // 雕塑的形态由开放、张力、连贯、轻重四项连续改变；散开控制碎屑与光晕。
       group.scale.setScalar(1 + pulse * 0.035);
       uniforms.uSpread.value = 0.2 + currentVisual.dispersion * 1.2;
       uniforms.uShape.value.set(currentVisual.openness, currentVisual.tension, currentVisual.coherence, currentVisual.weight);
-      // 形态按目标参数立刻开始流动，约两秒到位；首次显示、凝结和减少动态时直接到位。
-      const target = pickForm(targetVisual);
-      const blend = snapForm || frozen || motion.matches ? 1 : 1 - Math.exp(-delta * 1.6);
-      snapForm = false;
-      let spacing = 0;
-      for (let k = 0; k < formWeights.length; k++) {
-        formWeights[k] += ((k === target ? 1 : 0) - formWeights[k]) * blend;
-        if (Math.abs(formWeights[k] - (k === target ? 1 : 0)) < 1e-3) formWeights[k] = k === target ? 1 : 0;
-        spacing += formWeights[k] * formSpacings[k];
+      // 换形态：显影时等雾散开再在雾里换，否则（打开回廊、返回暗房、减少动态）直接到位。
+      const wanted = wantedForm();
+      const shown = slots[activeSlot];
+      if ((wanted.index !== shown.index || wanted.variant !== shown.variant) && (!developing || developing.reshape)) {
+        showForm(wanted, Boolean(developing));
       }
-      uniforms.uFormA.value.set(formWeights[0], formWeights[1], formWeights[2], formWeights[3]);
-      uniforms.uFormB.value = formWeights[4];
-      uniforms.uSpacing.value = spacing;
+      if (mixAnimation) {
+        const k = Math.min(1, (now - mixAnimation.start) / 900);
+        uniforms.uMix.value = mixAnimation.from + (mixAnimation.to - mixAnimation.from) * k * k * (3 - 2 * k);
+        if (k >= 1) mixAnimation = null;
+      }
+      const mix = uniforms.uMix.value;
+      uniforms.uSpacing.value = slots.A.spacing * (1 - mix) + slots.B.spacing * mix;
+      // 火焰偏暖时带琥珀色，偏冷时仍是银白的火。
+      const flame = (uniforms.uBehaviorA.value === 1 ? 1 - mix : 0) + (uniforms.uBehaviorB.value === 1 ? mix : 0);
+      uniforms.uHeat.value = flame * (0.25 + 0.75 * THREE.MathUtils.smoothstep(currentVisual.warmth, 0.4, 0.85));
     }
-    uniforms.uLight.value = (0.8 + currentVisual.luminosity * 0.4) * (1 + pulse * 0.16);
+    uniforms.uLight.value = (0.8 + currentVisual.luminosity * 0.4) * (1 + pulse * 0.16) * (1 + glow);
     const temperature = (currentVisual.warmth - 0.5) * 0.44;
     uniforms.uTint.value.set(1 + temperature, 1, 1 - temperature);
 
@@ -701,6 +745,11 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     setSculpture,
     setParams,
     setVisual(visual) { targetVisual = { ...visual }; },
+    setForm(form) { chosenForm = form ? { index: imageIndex(form.image), variant: form.variant } : null; },
+    develop() {
+      if (frozen || motion.matches || !mode) return;
+      developStart = performance.now();
+    },
     setFrozen(next, phase) {
       frozen = next;
       if (phase !== undefined) time = phase;

@@ -1,6 +1,8 @@
 import { validateVisual } from './visual.ts';
 import type { VisualState, LegacyVisual } from './visual.ts';
 import type { PhotoParticleData } from './photoToParticles.ts';
+import { validateForm } from './imagery.ts';
+import type { SculptureForm } from './imagery.ts';
 
 export const NEBULA_SEED = 0x5849414e;
 // v3 照片浮雕保存缩小重编码的照片（最长边 ≤ 1024，无原文件元数据），恢复时由它重新生成粒子。
@@ -8,6 +10,8 @@ export type ReliefPhoto = { image: string; width: number; height: number };
 export type SceneSnapshot = {
   version: 1 | 2 | 3; kind: 'nebula' | 'photo' | 'relief' | 'sculpture'; seed: number; phase: number;
   visual: VisualState | LegacyVisual; photo: PhotoParticleData | null; relief?: ReliefPhoto;
+  // 大模型为默认雕塑选的意象、名字与随机变化；更早的 v3 雕塑没有这一项，按参数规则恢复。
+  form?: SculptureForm;
 };
 export type Artwork = {
   version: 1 | 2 | 3; id: string; title: string; createdAt: number; thumbnail: string; scene: SceneSnapshot;
@@ -64,8 +68,14 @@ export function validateSnapshot(value: unknown): SceneSnapshot {
     if (!Number.isInteger(width) || !Number.isInteger(height)) throw invalid();
     relief = { image: r.image, width, height };
   } else if (input.relief !== undefined) throw invalid();
+  let form: SculptureForm | undefined;
+  if (input.form !== undefined) {
+    const valid = input.kind === 'sculpture' ? validateForm(input.form) : null;
+    if (!valid) throw invalid();
+    form = valid;
+  }
   return { version: input.version as 1 | 2 | 3, kind: input.kind as SceneSnapshot['kind'], seed: NEBULA_SEED, phase, visual, photo,
-    ...(relief ? { relief } : {}) };
+    ...(relief ? { relief } : {}), ...(form ? { form } : {}) };
 }
 function metadata(value: unknown) {
   const input = object(value);

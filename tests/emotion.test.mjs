@@ -48,38 +48,40 @@ test('voice analysis discards interrupted, superseded, stopped and late transcri
   s.begin('one');const one=s.complete('one','第一句虚构表达');
   s.begin('two');const two=s.complete('two','第二句虚构表达');
   assert.equal(pending[0].signal.aborted,true);
-  pending[0].resolve({...DEFAULT_VISUAL,weight:1});await one;assert.equal(applied.length,0);
-  pending[1].resolve({...DEFAULT_VISUAL,openness:.9});await two;assert.equal(applied.length,1);
+  pending[0].resolve({visual:{...DEFAULT_VISUAL,weight:1},form:null});await one;assert.equal(applied.length,0);
+  pending[1].resolve({visual:{...DEFAULT_VISUAL,openness:.9},form:null});await two;assert.equal(applied.length,1);
   await s.complete('one','晚到的旧转写');assert.equal(pending.length,2);
-  s.begin('three');const three=s.complete('three','第三句');s.cancel();pending[2].resolve(DEFAULT_VISUAL);await three;
+  s.begin('three');const three=s.complete('three','第三句');s.cancel();pending[2].resolve({visual:DEFAULT_VISUAL,form:null});await three;
   assert.equal(applied.length,1);
-  s.begin('four');const four=s.complete('four','第四句');s.stop();pending[3].resolve(DEFAULT_VISUAL);await four;
+  s.begin('four');const four=s.complete('four','第四句');s.stop();pending[3].resolve({visual:DEFAULT_VISUAL,form:null});await four;
   assert.equal(applied.length,1);
   assert.equal(s.words.length,0);
 });
 test('analysis failure keeps existing artwork and offers a retry without duplicating the utterance', async () => {
-  let count=0;const states=[],applied=[];
-  const s=new VoiceSculptor(()=>DEFAULT_VISUAL,v=>applied.push(v),(m,r)=>states.push(r),async words=>{
-    assert.equal(words.length,1);if(++count===1)throw new Error('fictional failure');return DEFAULT_VISUAL;
+  let count=0;const states=[],applied=[],appliedForms=[];
+  const s=new VoiceSculptor(()=>DEFAULT_VISUAL,(v,f)=>{applied.push(v);appliedForms.push(f);},(m,r)=>states.push(r),async words=>{
+    assert.equal(words.length,1);if(++count===1)throw new Error('fictional failure');return {visual:DEFAULT_VISUAL,form:{image:'rain',name:'虚构的雨',variant:.3}};
   });
   s.begin('one');await s.complete('one','虚构输入');assert.equal(applied.length,0);assert.equal(states.at(-1),true);
-  await s.complete('one','虚构输入');assert.equal(applied.length,1);assert.equal(s.words.length,1);s.stop();
+  await s.complete('one','虚构输入');assert.equal(applied.length,1);assert.deepEqual(appliedForms,[{image:'rain',name:'虚构的雨',variant:.3}]);assert.equal(s.words.length,1);s.stop();
 });
 test('sculpture API uses the shared model with only user speech and validates input', async t => {
   const config={apiKey:'fictional-key',baseUrl:'https://fictional.invalid/v1',model:'fictional-model'};
   let sent,calls=0;
   const server=createServer(createApiHandler({config,fetchImpl:async(url,options)=>{
     calls++;sent=JSON.parse(options.body);
-    return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify({visual:DEFAULT_VISUAL})}}]}));
+    return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify({visual:DEFAULT_VISUAL,form:{image:'flame',name:'「压着的火」'}})}}]}));
   }}));
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   t.after(()=>new Promise(r=>{server.closeAllConnections();server.close(r);}));
   const url=`http://127.0.0.1:${server.address().port}/api/sculpture`;
   const post=body=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const response=await post({utterances:['测试：被理解后很开心'],visual:DEFAULT_VISUAL});
-  assert.deepEqual(await response.json(),{visual:DEFAULT_VISUAL});
+  assert.deepEqual(await response.json(),{visual:DEFAULT_VISUAL,form:{image:'flame',name:'压着的火'}});
   assert.equal(sent.stream,false);assert.equal(sent.messages.length,2);assert.match(sent.messages[1].content,/被理解/);
   assert.equal(sent.response_format.json_schema.schema.properties.visual.required.length,8);
+  assert.ok(sent.response_format.json_schema.schema.properties.form.properties.image.enum.includes('flame'));
+  assert.match(sent.messages[0].content,/当前意象：尚未选择/);
   for(const utterances of [[],['x'.repeat(2001)],['x','x','x','x','x','x'],[{}]]) assert.equal((await post({utterances})).status,400);
   assert.equal(calls,1);
 });

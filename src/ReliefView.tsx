@@ -7,6 +7,7 @@ import { NEBULA_SEED, validateSnapshot } from './artwork';
 import type { ReliefPhoto, SceneSnapshot } from './artwork';
 import type { ParticleSceneHandle } from './ParticleScene';
 import type { VisualState } from './visual';
+import type { SculptureForm } from './imagery';
 import type { ActivitySignal } from './emotionShape';
 
 // 与 /relief-lab 同一套默认值；触屏和小屏降低密度，保证按压流畅。
@@ -27,14 +28,17 @@ function measureInsets(container: HTMLElement) {
 }
 
 // 新画法的 React 外壳：有照片时显示照片浮雕，没有照片时显示默认雕塑。
-export default function ReliefView({ photo, visual, snapshot = null, active = true, activity, ref }: {
-  photo: ReliefPhoto | null; visual: VisualState; snapshot?: SceneSnapshot | null; active?: boolean;
-  activity?: { current: ActivitySignal }; ref?: Ref<ParticleSceneHandle>;
+export default function ReliefView({ photo, visual, form = null, snapshot = null, active = true, activity, develop = 0, ref }: {
+  photo: ReliefPhoto | null; visual: VisualState; form?: SculptureForm | null; snapshot?: SceneSnapshot | null; active?: boolean;
+  activity?: { current: ActivitySignal };
+  // 每次 AI 给出新参数时加一，触发一次显影（散开再凝聚）。
+  develop?: number; ref?: Ref<ParticleSceneHandle>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<ReliefScene | null>(null);
   const visualRef = useRef(visual);
+  const formRef = useRef(form);
   const [error, setError] = useState<string | null>(null);
 
   useImperativeHandle(ref, () => ({ capture() {
@@ -43,10 +47,11 @@ export default function ReliefView({ photo, visual, snapshot = null, active = tr
     const shot = scene.capture();
     const common = { version: 3, seed: NEBULA_SEED, phase: shot.phase, visual: shot.visual, photo: null };
     return {
-      scene: validateSnapshot(photo ? { ...common, kind: 'relief', relief: photo } : { ...common, kind: 'sculpture' }),
+      scene: validateSnapshot(photo ? { ...common, kind: 'relief', relief: photo }
+        : { ...common, kind: 'sculpture', ...(form ? { form } : {}) }),
       thumbnail: shot.thumbnail,
     };
-  } }), [photo]);
+  } }), [photo, form]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -61,6 +66,7 @@ export default function ReliefView({ photo, visual, snapshot = null, active = tr
     }
     sceneRef.current = scene;
     scene.setVisual(visualRef.current);
+    scene.setForm(formRef.current);
     // 输入条长高、切换语音条时重新取景。
     const observer = new ResizeObserver(() => scene.refit());
     const dock = container.closest('.experience')?.querySelector('.dock-area');
@@ -82,6 +88,8 @@ export default function ReliefView({ photo, visual, snapshot = null, active = tr
   }, [photo]);
 
   useEffect(() => { visualRef.current = visual; sceneRef.current?.setVisual(visual); }, [visual]);
+  useEffect(() => { formRef.current = form; sceneRef.current?.setForm(form); }, [form]);
+  useEffect(() => { if (develop) sceneRef.current?.develop(); }, [develop]);
 
   useEffect(() => {
     const scene = sceneRef.current;

@@ -1,10 +1,19 @@
 import { validateVisual, VISUAL_KEYS } from '../src/visual.ts';
+import { IMAGE_IDS, validateForm } from '../src/imagery.ts';
 
 export const VISUAL_SCHEMA = { type: 'object', additionalProperties: false,
   properties: Object.fromEntries(VISUAL_KEYS.map(key => [key, { type: 'number' }])), required: [...VISUAL_KEYS] };
+export const FORM_SCHEMA = { type: 'object', additionalProperties: false,
+  properties: { image: { type: 'string', enum: IMAGE_IDS }, name: { type: 'string' } }, required: ['image', 'name'] };
 export const SCULPTURE_RESPONSE_FORMAT = { type: 'json_schema', json_schema: {
   name: 'xianying_sculpture', strict: true, schema: { type: 'object', additionalProperties: false,
-    properties: { visual: VISUAL_SCHEMA }, required: ['visual'] } } };
+    properties: { visual: VISUAL_SCHEMA, form: FORM_SCHEMA }, required: ['visual', 'form'] } } };
+
+// 模型给的形态只保留意象和名字；不合格时为 null，前端保留当前形态。
+export function parseForm(value) {
+  const form = validateForm(value);
+  return form ? { image: form.image, name: form.name } : null;
+}
 
 export const ART_RESPONSE_FORMAT = {
   type: 'json_schema',
@@ -15,8 +24,9 @@ export const ART_RESPONSE_FORMAT = {
       properties: {
         reply: { type: 'string' },
         visual: VISUAL_SCHEMA,
+        form: FORM_SCHEMA,
       },
-      required: ['reply', 'visual'],
+      required: ['reply', 'visual', 'form'],
     },
   },
 };
@@ -57,7 +67,7 @@ export function parseArtResponse(source) {
   if (typeof value?.reply !== 'string' || !value.reply.trim() || value.reply.length > 4000) {
     throw new Error('Invalid reply');
   }
-  return { reply: value.reply, visual: validateVisual(value.visual) };
+  return { reply: value.reply, visual: validateVisual(value.visual), form: parseForm(value.form) };
 }
 
 export const TITLE_RESPONSE_FORMAT = { type: 'json_schema', json_schema: {

@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { seededRandom } from './random.ts';
 import type { VisualState } from '../visual.ts';
+import { IMAGERY } from '../imagery.ts';
 
-// 默认雕塑有五种形态，共用同一批粒子：参数变化时，每颗粒子从旧形态的位置流向新形态的位置。
-export const SCULPTURE_FORMS = ['gather', 'braid', 'drape', 'unfold', 'apart'] as const;
-export type SculptureForm = typeof SCULPTURE_FORMS[number];
+// 默认雕塑的形态库共用同一批粒子：大模型从 IMAGERY 里挑意象，雾里从旧形态流向新形态。
+// 前五个是最早的五种形态；没有记录意象的旧作品仍由 pickForm 按参数选出其中之一。
+export const SCULPTURE_FORMS = IMAGERY.map(item => item.id);
+// 每种意象自带的动态：0 静置，1 火苗上窜，2 落雨，3 浪涌，4 旋转，5 飘雾，6 颤动，7 花开呼吸。
+const BEHAVIORS = [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7];
+export const formBehavior = (index: number) => BEHAVIORS[index] ?? 0;
 
 // 形态由作品参数直接决定，没有历史状态：同一组参数在回廊里恢复时一定是同一种形态。
 // 某一项明显偏离中性才换形态，否则保持凝聚；离散（连贯低）优先，其次看哪一项偏得最多。
@@ -21,9 +25,30 @@ export function pickForm(visual: Pick<VisualState, 'openness' | 'tension' | 'coh
   return best;
 }
 
+// 显影的节奏（秒）：散开、停顿、凝聚；新形态在停顿时于雾里换好，凝聚完成时轻轻一亮。
+export const DEVELOP = { scatter: 0.75, hold: 0.4, gather: 1.6 } as const;
+export const DEVELOP_TOTAL = DEVELOP.scatter + DEVELOP.hold + DEVELOP.gather + 0.6;
+const easeOut = (x: number) => 1 - (1 - x) ** 3;
+const easeInOut = (x: number) => x < 0.5 ? 4 * x ** 3 : 1 - (-2 * x + 2) ** 3 / 2;
+export function developCurve(seconds: number) {
+  const { scatter, hold, gather } = DEVELOP;
+  const gatherStart = scatter + hold;
+  const fog = seconds <= 0 ? 0 : seconds < scatter ? easeOut(seconds / scatter)
+    : seconds < gatherStart ? 1 : seconds < gatherStart + gather ? 1 - easeInOut((seconds - gatherStart) / gather) : 0;
+  const after = seconds - (gatherStart + gather * 0.7);
+  const glow = after > 0 && after < 0.9 ? Math.sin(after / 0.9 * Math.PI) * 0.22 : 0;
+  // 雾散到最开之前保留旧形态，之后才流向新形态。
+  return { fog, glow, reshape: seconds >= scatter * 0.9, done: seconds >= DEVELOP_TOTAL };
+}
+
 type Vec3 = [number, number, number];
 type Patch = { fn: (u: number, v: number, out: Vec3) => void; sided: boolean; inside?: (u: number, v: number, out: Vec3) => void };
-type FormSample = { positions: Float32Array; normals: Float32Array; ao: Float32Array; sided: Float32Array; area: number };
+// flow 是每颗粒子在形态里的位置参数（沿火苗的高度、雨滴的相位、漩涡的高度等），供动态使用。
+// spacing 给体积类形态（雨、雾）直接指定颗粒间距；fit 为 false 时坐标已按画框设计，不再缩放。
+type FormSample = {
+  positions: Float32Array; normals: Float32Array; ao: Float32Array; sided: Float32Array; flow: Float32Array;
+  area: number; spacing?: number; fit?: boolean;
+};
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -51,7 +76,7 @@ function samplePatches(patches: Patch[], count: number, random: () => number): F
   });
   const total = stats.reduce((value, item) => value + item.area, 0);
   const positions = new Float32Array(count * 3), normals = new Float32Array(count * 3);
-  const ao = new Float32Array(count).fill(1), sided = new Float32Array(count);
+  const ao = new Float32Array(count).fill(1), sided = new Float32Array(count), flow = new Float32Array(count);
   let index = 0;
   patches.forEach((patch, k) => {
     const target = k === patches.length - 1 ? count : Math.min(count, index + Math.round(count * stats[k].area / total));
@@ -67,10 +92,11 @@ function samplePatches(patches: Patch[], count: number, random: () => number): F
       positions[index * 3] = p[0]; positions[index * 3 + 1] = p[1]; positions[index * 3 + 2] = p[2];
       normals[index * 3] = n[0] * scale; normals[index * 3 + 1] = n[1] * scale; normals[index * 3 + 2] = n[2] * scale;
       sided[index] = patch.sided ? 1 : 0;
+      flow[index] = u;
       index++;
     }
   });
-  return { positions, normals, ao, sided, area: total };
+  return { positions, normals, ao, sided, flow, area: total };
 }
 
 // 凝聚：几块软体挤成一团，只保留并集的外表面，块与块之间的缝隙压暗。
@@ -125,7 +151,7 @@ function sampleGather(count: number, random: () => number): FormSample {
     ao[accepted] = THREE.MathUtils.smoothstep(nearest, 1, 1.7);
     accepted++;
   }
-  return { positions, normals, ao, sided, area: totalWeight * accepted / Math.max(1, drawn) };
+  return { positions, normals, ao, sided, flow: new Float32Array(count), area: totalWeight * accepted / Math.max(1, drawn) };
 }
 
 // 交织：两股粗管沿三叶结绕行，彼此缠绕、前后穿过。
@@ -243,6 +269,200 @@ function apartPatches(): Patch[] {
   }));
 }
 
+// 火焰：七条火舌从一层余烬上窜起，中间最高，火舌下宽上尖、向上弯曲。
+const TONGUES = [
+  { x: 0, z: 0, h: 3.0, w: 0.62, phase: 0 }, { x: -0.55, z: 0.2, h: 2.2, w: 0.45, phase: 1.3 },
+  { x: 0.6, z: -0.15, h: 2.4, w: 0.48, phase: 2.1 }, { x: -1.05, z: -0.25, h: 1.5, w: 0.36, phase: 3.0 },
+  { x: 1.05, z: 0.25, h: 1.65, w: 0.36, phase: 4.2 }, { x: 0.25, z: 0.45, h: 1.9, w: 0.4, phase: 5.1 },
+  { x: -0.3, z: -0.45, h: 2.0, w: 0.4, phase: 0.7 },
+];
+function flamePatches(): Patch[] {
+  const tongues: Patch[] = TONGUES.map(t => ({
+    sided: true,
+    fn: (u: number, v: number, out: Vec3) => {
+      const r = t.w * 1.6 * Math.sin(Math.PI * (0.08 + 0.92 * u)) ** 0.8 * (1 - u) ** 0.6;
+      const turn = v * Math.PI * 2;
+      out[0] = t.x + Math.sin(u * 2.6 + t.phase) * 0.2 * u + Math.cos(turn) * r;
+      out[1] = -1.5 + u * t.h;
+      out[2] = t.z + Math.cos(u * 2.2 + t.phase) * 0.12 * u + Math.sin(turn) * r * 0.8;
+    },
+  }));
+  const embers: Patch = {
+    sided: false,
+    inside: (_u, _v, out) => { out[0] = 0; out[1] = -1.45; out[2] = 0; },
+    fn: (u, v, out) => {
+      const theta = u * Math.PI * 2, z = v * 2 - 1, ring = Math.sqrt(Math.max(0, 1 - z * z));
+      out[0] = Math.cos(theta) * ring * 1.35; out[1] = -1.45 + z * 0.22; out[2] = Math.sin(theta) * ring * 0.7;
+    },
+  };
+  return [...tongues, embers];
+}
+
+// 雨：上方一层低垂的云，下面稀疏的雨丝。雨滴的 flow 是下落相位，云的 flow 记为 -1（不下落），
+// 用不到的颗粒记为 -2，不显示：粒子总数各形态相同，雨丝太密会连成一面墙。
+// 坐标按画框直接设计，着色器里的下落范围与这里一致。
+export const RAIN_TOP = 0.65, RAIN_SPAN = 2.3;
+const PUFFS: [number, number, number, number][] = [
+  [-1.4, 0.9, 0, 0.55], [-0.5, 1.0, 0.1, 0.62], [0.45, 0.98, -0.1, 0.6],
+  [1.35, 0.88, 0.05, 0.52], [-0.95, 0.75, 0.25, 0.42], [0.95, 0.75, 0.25, 0.42],
+];
+function sampleRain(count: number, random: () => number): FormSample {
+  const positions = new Float32Array(count * 3), normals = new Float32Array(count * 3);
+  const ao = new Float32Array(count).fill(0.9), sided = new Float32Array(count).fill(1), flow = new Float32Array(count);
+  const cloud = Math.round(count * 0.5), drops = Math.round(count * 0.09);
+  for (let i = 0; i < cloud; i++) {
+    const [cx, cy, cz, r] = PUFFS[Math.floor(random() * PUFFS.length)];
+    const z = random() * 2 - 1, turn = random() * Math.PI * 2, ring = Math.sqrt(1 - z * z);
+    let dx = ring * Math.cos(turn), dy = ring * Math.sin(turn);
+    const dz = z;
+    if (dy < 0) dy *= 0.45;
+    const reach = r * (0.92 + random() * 0.08);
+    positions.set([cx + dx * reach, cy + dy * reach, cz + dz * reach * 0.8], i * 3);
+    const size = Math.hypot(dx, dy, dz) || 1;
+    dx /= size;
+    normals.set([dx, dy / size, dz / size], i * 3);
+    ao[i] = 0.55 + 0.45 * (dy / size * 0.5 + 0.5);
+    flow[i] = -1;
+  }
+  // 每滴雨是竖直的一小串颗粒，远看是一道细线。
+  for (let i = cloud; i < count;) {
+    const x = (random() * 2 - 1) * 1.75, z = (random() * 2 - 1) * 0.6, phase = random();
+    for (let k = 0; k < 10 && i < count; k++, i++) {
+      positions.set([x, RAIN_TOP - phase * RAIN_SPAN + k * 0.035, z], i * 3);
+      normals.set([0, 0, 1], i * 3);
+      flow[i] = i < cloud + drops ? phase : -2;
+    }
+  }
+  return { positions, normals, ao, sided, flow, area: 0, spacing: 0.02, fit: false };
+}
+
+// 海浪：一片起伏的浪面，远处高、近处低，像从岸上望出去；浪谷压暗，浪脊才看得出来。
+const waveSwell = (x: number, depth: number) =>
+  0.5 * Math.sin(1.6 * x + 1.3 * depth) * (0.6 + 0.4 * Math.cos(0.7 * x)) + 0.2 * Math.sin(3.1 * x - 2 * depth);
+function sampleWave(count: number, random: () => number): FormSample {
+  const form = samplePatches([{
+    sided: true,
+    fn: (u, v, out) => {
+      const x = (u * 2 - 1) * 2.4, depth = v * 2 - 1;
+      out[0] = x; out[1] = waveSwell(x, depth) + depth * 0.6; out[2] = -depth * 1.2;
+    },
+  }], count, random);
+  for (let i = 0; i < count; i++) {
+    const swell = waveSwell(form.positions[i * 3], -form.positions[i * 3 + 2] / 1.2);
+    form.ao[i] = 0.25 + 0.75 * THREE.MathUtils.smoothstep(swell, -0.55, 0.55);
+  }
+  return form;
+}
+
+// 漩涡：上宽下窄的漏斗，表面有螺旋纹，转起来看得出越往下越快。
+function vortexPatches(): Patch[] {
+  return [{
+    sided: true,
+    fn: (u: number, v: number, out: Vec3) => {
+      const theta = v * Math.PI * 2;
+      const r = (0.1 + 1.45 * u ** 1.7) * (1 + 0.14 * Math.sin(4 * theta - 10 * u));
+      out[0] = Math.cos(theta) * r; out[1] = -1.7 + u * 3.4; out[2] = Math.sin(theta) * r;
+    },
+  }];
+}
+
+// 云雾：几团柔软的雾，颗粒分布在团的内部，边缘松散。
+const BLOBS: [number, number, number, number][] = [
+  [-1.5, 0.2, 0, 0.75], [-0.6, 0.45, 0.2, 0.95], [0.45, 0.3, -0.15, 1.0], [1.45, 0.1, 0.1, 0.75],
+  [-0.2, -0.45, 0.3, 0.7], [0.9, -0.5, -0.2, 0.6], [-1.1, -0.55, -0.25, 0.55],
+];
+function sampleCloud(count: number, random: () => number): FormSample {
+  const positions = new Float32Array(count * 3), normals = new Float32Array(count * 3);
+  const ao = new Float32Array(count), sided = new Float32Array(count).fill(1), flow = new Float32Array(count);
+  const weights = BLOBS.map(blob => blob[3] ** 3), total = weights.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < count; i++) {
+    let pick = random() * total, k = 0;
+    while (k < BLOBS.length - 1 && pick >= weights[k]) pick -= weights[k++];
+    const [cx, cy, cz, r] = BLOBS[k];
+    const z = random() * 2 - 1, turn = random() * Math.PI * 2, ring = Math.sqrt(1 - z * z);
+    const dx = ring * Math.cos(turn), dy = ring * Math.sin(turn);
+    const d = (0.35 + 0.65 * Math.cbrt(random())) * (1 + 0.25 * (random() - 0.5));
+    positions.set([cx + dx * d * r, cy + dy * d * r * 0.8, cz + z * d * r * 0.7], i * 3);
+    normals.set([dx, dy, z], i * 3);
+    ao[i] = 0.6 + 0.4 * Math.min(1, d);
+    flow[i] = Math.min(1, d);
+  }
+  return { positions, normals, ao, sided, flow, area: 0, spacing: 0.03 };
+}
+
+// 尖刺：一团核心向四周长出长短不一的尖刺。
+function thornPatches(): Patch[] {
+  const core: Patch = {
+    sided: false,
+    inside: (_u, _v, out) => { out[0] = 0; out[1] = 0; out[2] = 0; },
+    fn: (u, v, out) => {
+      const theta = u * Math.PI * 2, z = v * 2 - 1, ring = Math.sqrt(Math.max(0, 1 - z * z));
+      const r = 0.8 * (1 + 0.05 * Math.sin(theta * 5 + z * 3));
+      out[0] = Math.cos(theta) * ring * r; out[1] = z * r; out[2] = Math.sin(theta) * ring * r;
+    },
+  };
+  const spikes: Patch[] = [];
+  const count = 18;
+  for (let k = 0; k < count; k++) {
+    const y = 1 - 2 * (k + 0.5) / count, radius = Math.sqrt(1 - y * y), phi = k * 2.39996;
+    const dir: Vec3 = [Math.cos(phi) * radius, y, Math.sin(phi) * radius];
+    const side = cross(dir, Math.abs(dir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]);
+    const s = length(side);
+    const a: Vec3 = [side[0] / s, side[1] / s, side[2] / s];
+    const b = cross(dir, a);
+    const reach = 0.9 + 0.7 * ((Math.sin(k * 12.9898) * 43758.5453) % 1 + 1) % 1;
+    const axis = (u: number, out: Vec3) => { for (let j = 0; j < 3; j++) out[j] = dir[j] * (0.7 + u * reach); };
+    spikes.push({
+      sided: false,
+      inside: (u, _v, out) => axis(u, out),
+      fn: (u, v, out) => {
+        axis(u, out);
+        const r = 0.26 * (1 - u) ** 1.3 + 0.004, turn = v * Math.PI * 2;
+        for (let j = 0; j < 3; j++) out[j] += (a[j] * Math.cos(turn) + b[j] * Math.sin(turn)) * r;
+      },
+    });
+  }
+  return [core, ...spikes];
+}
+
+// 花开：两层花瓣从花心向外张开，整体朝镜头倾斜，看得见花心。
+const PETAL_LAYERS = [
+  { count: 7, reach: 1.9, width: 0.7, lift: 1.0, cup: 0.3, offset: 0 },
+  { count: 5, reach: 1.25, width: 0.55, lift: 1.5, cup: 0.35, offset: 0.4 },
+];
+const BLOOM_TILT = 0.6;
+function bloomPatches(): Patch[] {
+  const tilt = (out: Vec3) => {
+    const c = Math.cos(BLOOM_TILT), s = Math.sin(BLOOM_TILT), y = out[1], z = out[2];
+    out[1] = y * c - z * s; out[2] = y * s + z * c;
+  };
+  const petals: Patch[] = PETAL_LAYERS.flatMap(layer => Array.from({ length: layer.count }, (_, k) => {
+    const angle = (k + layer.offset) / layer.count * Math.PI * 2;
+    return {
+      sided: true,
+      fn: (u: number, v: number, out: Vec3) => {
+        const across = v * 2 - 1;
+        const w = layer.width * Math.sin(Math.PI * Math.min(1, u * 1.05)) ** 0.7 * (1 - 0.25 * u);
+        const reach = 0.15 + u * layer.reach;
+        out[0] = Math.cos(angle) * reach - Math.sin(angle) * across * w;
+        out[1] = -0.7 + u * u * layer.lift + layer.cup * across * across * w - 0.2 * u ** 4;
+        out[2] = Math.sin(angle) * reach + Math.cos(angle) * across * w;
+        tilt(out);
+      },
+    };
+  }));
+  const center: Patch = {
+    sided: false,
+    inside: (_u, _v, out) => { out[0] = 0; out[1] = -0.55; out[2] = 0; tilt(out); },
+    fn: (u, v, out) => {
+      const theta = u * Math.PI * 2, z = v * 2 - 1, ring = Math.sqrt(Math.max(0, 1 - z * z));
+      out[0] = Math.cos(theta) * ring * 0.32; out[1] = -0.55 + z * 0.3; out[2] = Math.sin(theta) * ring * 0.32;
+      tilt(out);
+    },
+  };
+  return [...petals, center];
+}
+
 // 每种形态缩放到同样的画框里，取景不随形态跳动。
 const FRAME = new THREE.Vector2(4.6, 3.3);
 function fitToFrame(sample: FormSample) {
@@ -261,30 +481,50 @@ function fitToFrame(sample: FormSample) {
     positions[i + 2] = (positions[i + 2] - cz) * scale;
   }
   sample.area *= scale * scale;
+  if (sample.spacing) sample.spacing *= scale;
 }
 
+const SAMPLERS: ((count: number, random: () => number) => FormSample)[] = [
+  sampleGather,
+  (count, random) => samplePatches(braidPatches(), count, random),
+  (count, random) => samplePatches(drapePatches(), count, random),
+  (count, random) => samplePatches(unfoldPatches(), count, random),
+  (count, random) => samplePatches(apartPatches(), count, random),
+  (count, random) => samplePatches(flamePatches(), count, random),
+  sampleRain,
+  sampleWave,
+  (count, random) => samplePatches(vortexPatches(), count, random),
+  sampleCloud,
+  (count, random) => samplePatches(thornPatches(), count, random),
+  (count, random) => samplePatches(bloomPatches(), count, random),
+];
+
+// 一种形态在显卡上的数据：xyz 位置 + w 打包缝隙暗度（0–1）与是否双面（+2）；法线；flow；颗粒间距。
+export type BuiltForm = { packed: Float32Array; normals: Float32Array; flow: Float32Array; spacing: number };
+
+// 每种形态各用固定种子，按需生成：同一种形态每次生成的坐标完全相同，回廊恢复时一致。
+export function buildForm(index: number, count: number): BuiltForm {
+  const form = SAMPLERS[index](count, seededRandom(0x636c6179 + index * 7919));
+  if (form.fit !== false) fitToFrame(form);
+  const packed = new Float32Array(count * 4);
+  for (let i = 0; i < count; i++) {
+    packed.set(form.positions.subarray(i * 3, i * 3 + 3), i * 4);
+    packed[i * 4 + 3] = form.ao[i] + form.sided[i] * 2;
+  }
+  // 各形态面积不同，颗粒间距按形态计算，表面始终连成一片。
+  return { packed, normals: form.normals, flow: form.flow, spacing: form.spacing ?? Math.sqrt(form.area / count) * 1.3 };
+}
+
+// 粒子有 A、B 两个槽位：显示一种形态时只用一个槽，换形态时新形态写进另一个槽，雾里从旧槽流到新槽。
 export function buildSculpture(count: number, dustCount: number) {
   const random = seededRandom(0x636c6179);
-  const forms = [
-    sampleGather(count, random),
-    samplePatches(braidPatches(), count, random),
-    samplePatches(drapePatches(), count, random),
-    samplePatches(unfoldPatches(), count, random),
-    samplePatches(apartPatches(), count, random),
-  ];
-  forms.forEach(fitToFrame);
   const core = new THREE.BufferGeometry();
-  forms.forEach((form, k) => {
-    // xyz 位置；w 打包缝隙暗度（0–1）与是否双面（+2）。
-    const packed = new Float32Array(count * 4);
-    for (let i = 0; i < count; i++) {
-      packed.set(form.positions.subarray(i * 3, i * 3 + 3), i * 4);
-      packed[i * 4 + 3] = form.ao[i] + form.sided[i] * 2;
-    }
-    core.setAttribute(`aP${k}`, new THREE.BufferAttribute(packed, 4));
-    core.setAttribute(`aN${k}`, new THREE.BufferAttribute(form.normals, 3));
-  });
-  core.setAttribute('position', new THREE.BufferAttribute(forms[0].positions, 3));
+  for (const slot of ['A', 'B']) {
+    core.setAttribute(`aP${slot}`, new THREE.BufferAttribute(new Float32Array(count * 4), 4));
+    core.setAttribute(`aN${slot}`, new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    core.setAttribute(`aF${slot}`, new THREE.BufferAttribute(new Float32Array(count), 1));
+  }
+  core.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
   const seeds = new Float32Array(count);
   for (let i = 0; i < count; i++) seeds[i] = random();
   core.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
@@ -302,12 +542,29 @@ export function buildSculpture(count: number, dustCount: number) {
   dust.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
   dust.setAttribute('aSeed', new THREE.BufferAttribute(dustSeeds, 1));
 
-  return {
-    core, dust, count,
-    size: FRAME.clone(),
-    // 各形态面积不同，颗粒间距按当前形态混合，表面始终连成一片。
-    spacings: forms.map(form => Math.sqrt(form.area / count) * 1.3),
+  // 已生成的形态留几份在内存里，来回切换时不必重算。
+  const cache = new Map<number, BuiltForm>();
+  const form = (index: number) => {
+    let built = cache.get(index);
+    if (!built) {
+      built = buildForm(index, count);
+      cache.set(index, built);
+      if (cache.size > 4) cache.delete(cache.keys().next().value!);
+    }
+    return built;
   };
+  // 把一种形态写进 A 或 B 槽，返回它的颗粒间距。
+  const load = (slot: 'A' | 'B', index: number) => {
+    const built = form(index);
+    for (const [name, data] of [[`aP${slot}`, built.packed], [`aN${slot}`, built.normals], [`aF${slot}`, built.flow]] as const) {
+      const attribute = core.getAttribute(name) as THREE.BufferAttribute;
+      (attribute.array as Float32Array).set(data);
+      attribute.needsUpdate = true;
+    }
+    return built.spacing;
+  };
+
+  return { core, dust, count, size: FRAME.clone(), load };
 }
 
 // 屏幕空间的穿透孔：粒子投到屏幕后查压痕场，再在观察空间里沿屏幕方向推开。
@@ -356,35 +613,104 @@ const SHARED_GLSL = /* glsl */ `
   uniform vec3 uTint;
   // x 开放、y 张力、z 连贯、w 轻重；0.5 是中性。
   uniform vec4 uShape;
+  // 显影：AI 给出新参数时，粒子先散成雾（0→1），再凝聚成新形态（1→0）。
+  uniform float uDevelop;
   ${SCREEN_PUSH_GLSL}
 `;
 
 export const sculptureCoreVertex = /* glsl */ `
   ${SHARED_GLSL}
-  // 五种形态的混合权重：凝聚、交织、垂落、舒展、离散。
-  uniform vec4 uFormA;
-  uniform float uFormB;
-  attribute vec4 aP0; attribute vec4 aP1; attribute vec4 aP2; attribute vec4 aP3; attribute vec4 aP4;
-  attribute vec3 aN0; attribute vec3 aN1; attribute vec3 aN2; attribute vec3 aN3; attribute vec3 aN4;
+  // 两个槽位的形态：uMix 为 0 显示 A，为 1 显示 B，中间是雾里的流动。
+  uniform float uMix;
+  uniform float uBehaviorA;
+  uniform float uBehaviorB;
+  // 同一意象每次略有不同：x 绕竖轴转角、y 横向缩放、z 纵向缩放、w 动态相位。
+  uniform vec4 uVariantA;
+  uniform vec4 uVariantB;
+  // 火焰偏暖时火舌带一点琥珀色，0 为单色。
+  uniform float uHeat;
+  attribute vec4 aPA; attribute vec3 aNA; attribute float aFA;
+  attribute vec4 aPB; attribute vec3 aNB; attribute float aFB;
   attribute float aSeed;
   varying vec3 vColor;
-  void accumulate(vec4 point, vec3 normal, float weight, inout vec3 p, inout vec3 n, inout float ao, inout float sided) {
-    float twoSided = step(1.5, point.w);
-    p += point.xyz * weight;
-    n += normal * weight;
-    ao += (point.w - twoSided * 2.0) * weight;
-    sided += twoSided * weight;
+
+  vec3 turnY(vec3 v, float angle) {
+    float c = cos(angle), s = sin(angle);
+    return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
   }
+  // 每种意象自带的动态；fade 用来让落到底的雨滴、飘散的火星缩小消失。
+  void behave(float behavior, vec4 variant, float flow, inout vec3 p, inout vec3 n, inout float fade) {
+    float t = uTime + variant.w * 10.0;
+    if (behavior > 0.5 && behavior < 1.5) {
+      float h = clamp((p.y + 1.6) / 3.2, 0.0, 1.0);
+      p.x += sin(p.y * 2.4 - t * 4.2 + aSeed * 2.0) * 0.14 * h;
+      p.z += cos(p.y * 2.0 - t * 3.6 + aSeed) * 0.08 * h;
+      p.y += sin(t * 6.0 + flow * 9.0) * 0.05 * h;
+      // 少数颗粒离开火舌，变成上升的火星，越飞越小。
+      if (fract(aSeed * 23.7) > 0.93) {
+        float life = fract(t * 0.35 + aSeed * 7.0);
+        p.y += life * 1.4;
+        p.x += sin(life * 6.0 + aSeed * 30.0) * 0.2;
+        fade *= 1.0 - life;
+      }
+    } else if (behavior > 1.5 && behavior < 2.5) {
+      if (flow < -1.5) {
+        fade = 0.0;
+      } else if (flow >= 0.0) {
+        float offset = p.y - (${RAIN_TOP.toFixed(3)} - flow * ${RAIN_SPAN.toFixed(3)});
+        float fall = fract(flow + t * 0.45);
+        p.y = ${RAIN_TOP.toFixed(3)} - fall * ${RAIN_SPAN.toFixed(3)} + offset;
+        p.x -= fall * 0.12;
+        fade *= smoothstep(0.0, 0.06, fall) * (1.0 - smoothstep(0.85, 1.0, fall));
+      } else {
+        p.x += sin(t * 0.3 + p.y * 2.0) * 0.05;
+      }
+    } else if (behavior > 2.5 && behavior < 3.5) {
+      p.y += 0.26 * sin(1.8 * p.x - t * 1.6 - p.z * 1.2) + 0.1 * sin(2.7 * p.z + t * 1.1 + p.x);
+    } else if (behavior > 3.5 && behavior < 4.5) {
+      float angle = t * (0.9 + 1.6 * (1.0 - flow));
+      p = turnY(p, angle);
+      n = turnY(n, angle);
+    } else if (behavior > 4.5 && behavior < 5.5) {
+      p += vec3(sin(t * 0.35 + aSeed * 6.0), cos(t * 0.3 + aSeed * 5.0), sin(t * 0.25 + aSeed * 4.0)) * 0.1;
+      p.x += sin(t * 0.15 + p.y) * 0.15;
+    } else if (behavior > 5.5 && behavior < 6.5) {
+      p += n * sin(t * 13.0 + aSeed * 40.0) * 0.016;
+      p *= 1.0 + sin(t * 2.6) * 0.025;
+    } else if (behavior > 6.5) {
+      p.xz *= 1.0 + sin(t * 0.7) * 0.06 * flow;
+    }
+    p = turnY(p, variant.x);
+    n = turnY(n, variant.x);
+    p.x *= variant.y;
+    p.y *= variant.z;
+  }
+  void unpack(vec4 point, out float ao, out float sided) {
+    sided = step(1.5, point.w);
+    ao = point.w - sided * 2.0;
+  }
+
   void main() {
     vec3 p = vec3(0.0), n = vec3(0.0);
-    float ao = 0.0, sided = 0.0;
-    accumulate(aP0, aN0, uFormA.x, p, n, ao, sided);
-    accumulate(aP1, aN1, uFormA.y, p, n, ao, sided);
-    accumulate(aP2, aN2, uFormA.z, p, n, ao, sided);
-    accumulate(aP3, aN3, uFormA.w, p, n, ao, sided);
-    accumulate(aP4, aN4, uFormB, p, n, ao, sided);
+    float ao = 0.0, sided = 0.0, fade = 0.0, heatHeight = 0.0;
+    if (uMix < 1.0) {
+      vec3 pa = aPA.xyz, na = aNA;
+      float fa = 1.0, aoA, sidedA;
+      unpack(aPA, aoA, sidedA);
+      heatHeight += clamp((pa.y + 1.6) / 3.2, 0.0, 1.0) * (1.0 - uMix);
+      behave(uBehaviorA, uVariantA, aFA, pa, na, fa);
+      p += pa * (1.0 - uMix); n += na * (1.0 - uMix); ao += aoA * (1.0 - uMix); sided += sidedA * (1.0 - uMix); fade += fa * (1.0 - uMix);
+    }
+    if (uMix > 0.0) {
+      vec3 pb = aPB.xyz, nb = aNB;
+      float fb = 1.0, aoB, sidedB;
+      unpack(aPB, aoB, sidedB);
+      heatHeight += clamp((pb.y + 1.6) / 3.2, 0.0, 1.0) * uMix;
+      behave(uBehaviorB, uVariantB, aFB, pb, nb, fb);
+      p += pb * uMix; n += nb * uMix; ao += aoB * uMix; sided += sidedB * uMix; fade += fb * uMix;
+    }
     // 换形态途中粒子带一点旋流，不是直线滑过去。
-    float morph = dot(uFormA, vec4(1.0) - uFormA) + uFormB * (1.0 - uFormB);
+    float morph = uMix * (1.0 - uMix);
     p += vec3(sin(aSeed * 40.0 + uTime * 1.3), cos(aSeed * 31.0 + uTime * 1.1), sin(aSeed * 17.0 + uTime)) * morph * 0.6;
     n = length(n) > 1e-3 ? normalize(n) : vec3(0.0, 0.0, 1.0);
 
@@ -402,12 +728,23 @@ export const sculptureCoreVertex = /* glsl */ `
     // 散开：少数表面颗粒离开表面，成为浮在旁边的碎屑。
     float flake = pow(fract(aSeed * 13.7), 14.0) * uSpread * 0.5;
     p += n * flake * 0.8 + vec3(sin(uTime * 0.4 + aSeed * 30.0), cos(uTime * 0.35 + aSeed * 20.0), 0.0) * flake * 0.15;
+    // 显影：每颗粒子沿自己的方向飘远，并绕竖轴旋开；远近不一，像一团雾。
+    if (uDevelop > 0.0) {
+      vec3 drift = vec3(sin(aSeed * 91.3), cos(aSeed * 57.1), sin(aSeed * 33.7 + 1.3));
+      vec3 dir = normalize(drift + normalize(p + vec3(1e-4)) * 0.9);
+      p += dir * (0.4 + 1.5 * fract(aSeed * 7.77)) * uDevelop;
+      float turn = uDevelop * (0.6 + 0.9 * fract(aSeed * 3.1));
+      p.xz = mat2(cos(turn), -sin(turn), sin(turn), cos(turn)) * p.xz;
+      p += vec3(sin(uTime * 2.0 + aSeed * 50.0), cos(uTime * 1.7 + aSeed * 40.0), sin(uTime * 1.5 + aSeed * 20.0)) * 0.12 * uDevelop;
+    }
 
     vec4 viewPosition = modelViewMatrix * vec4(p, 1.0);
     vec3 viewNormal = normalize(normalMatrix * n);
     float facing = dot(viewNormal, normalize(-viewPosition.xyz));
     // 封闭体背面的颗粒不画，否则会透过前层空隙露出暗点；薄片两面都画，法线翻向镜头。
-    if (sided < 0.5 && facing < -0.05) {
+    // 散成雾时背面颗粒也渐渐出现，雾才是满的；凝聚回表面时再渐渐隐去。
+    float backHide = sided < 0.5 && facing < -0.05 ? 1.0 - smoothstep(0.15, 0.6, uDevelop) : 0.0;
+    if (backHide > 0.999 || fade < 0.01) {
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       gl_PointSize = 0.0;
       return;
@@ -427,8 +764,11 @@ export const sculptureCoreVertex = /* glsl */ `
     float shade = (0.12 + 0.62 * diffuse + 0.28 * wrap) * mix(0.3, 1.0, ao);
     vec3 surface = mix(vec3(0.2, 0.25, 0.34), vec3(0.9, 0.93, 0.96), clamp(shade, 0.0, 1.0)) * (0.35 + 0.65 * shade);
     vColor = (surface + rim * 0.22 * vec3(0.7, 0.85, 1.0) + spec * 0.3) * (0.92 + 0.14 * fract(aSeed * 91.7));
+    vColor *= mix(vec3(1.0), vec3(1.35, 0.82, 0.5), uHeat * (0.35 + 0.65 * heatHeight));
     vColor *= (1.0 + pushed.x * 0.6 + pushed.y * 0.15) * uTint * uLight;
-    gl_PointSize = clamp(uSpacing * uSize * (0.85 + 0.3 * fract(aSeed * 13.1)) * uProj / -viewPosition.z, uMinSize, 14.0);
+    vColor *= 1.0 - 0.3 * uDevelop;
+    float pointSize = uSpacing * uSize * (0.85 + 0.3 * fract(aSeed * 13.1)) * uProj / -viewPosition.z;
+    gl_PointSize = clamp(pointSize * (1.0 - 0.35 * uDevelop), uMinSize, 14.0) * (1.0 - backHide) * min(1.0, fade);
   }
 `;
 
@@ -444,7 +784,7 @@ export const sculptureDustVertex = /* glsl */ `
     float c = cos(angle), s = sin(angle);
     p.xz = mat2(c, -s, s, c) * p.xz;
     p += vec3(sin(uTime * 0.3 + seed * 50.0), cos(uTime * 0.27 + seed * 23.0), sin(uTime * 0.22 + seed * 11.0)) * 0.05;
-    p *= 1.0 + (uSpread - 0.8) * 0.3;
+    p *= 1.0 + (uSpread - 0.8) * 0.3 + uDevelop * 0.35;
     p.y -= (uShape.w - 0.5) * 0.4;
     vec4 viewPosition = modelViewMatrix * vec4(p, 1.0);
     vec2 tilt;
