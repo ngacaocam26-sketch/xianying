@@ -677,9 +677,10 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     const temperature = (currentVisual.warmth - 0.5) * 0.44;
     uniforms.uTint.value.set(1 + temperature, 1, 1 - temperature);
 
-    // 照片只轻微摆动；雕塑转得更多，让体积和暗缝随角度显出来。
+    // 照片只轻微摆动；雕塑左右摆到约 ±40°，约 30 秒一个来回，让体积和暗缝随角度显出来。
+    // 不整圈转：海浪、花开、雨这些意象是朝正面做的，转到侧面会变成一条线或只剩背面。
     if (mode === 'photo') group.rotation.set(-0.06 + Math.sin(time * 0.17) * 0.025 + tilt.y, Math.sin(time * 0.2) * 0.07 + tilt.x, 0);
-    else group.rotation.set(0.12 + Math.sin(time * 0.09) * 0.05 + tilt.y, Math.sin(time * 0.12) * 0.4 + tilt.x * 1.2, -0.06);
+    else group.rotation.set(0.12 + Math.sin(time * 0.13) * 0.06 + tilt.y, Math.sin(time * 0.21) * 0.7 + tilt.x * 1.2, -0.06);
     group.updateMatrixWorld();
 
     let onSurface = false;
