@@ -20,6 +20,9 @@ export const IMAGE_IDS = IMAGERY.map(item => item.id) as ImageId[];
 // variant 是 0—1 的随机数：同一种意象每次长得略有不同，存档时一起保存，恢复时一模一样。
 export type SculptureForm = { image: ImageId; name: string; variant: number };
 
+// 还没有表达时暗房里是一团雾；第一次表达后才显影成模型挑的意象。
+export const OPENING_FORM: SculptureForm = { image: 'cloud', name: '一团雾', variant: 0 };
+
 export function imageIndex(id: ImageId): number { return IMAGE_IDS.indexOf(id); }
 export function imageLabel(id: ImageId): string { return IMAGERY[imageIndex(id)].label; }
 

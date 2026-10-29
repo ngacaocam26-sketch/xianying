@@ -108,7 +108,6 @@ export default function VoicePanel({ open, onClose, onCondense, visual, form = n
       <div className="dock-meta">
         <button type="button" className="meta-pill" onClick={() => { stop(); onCondense(); }}>凝结此刻<span aria-hidden="true">›</span></button>
       </div>
-      <p className="dock-note">语音与最近几句转写交给阿里云百炼处理，不保存录音 · 每次最长 5 分钟</p>
     </section>
   );
 }

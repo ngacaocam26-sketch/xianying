@@ -104,9 +104,13 @@ node tests/visual.test.mjs
 node tests/voice.test.mjs
 node tests/artwork.test.mjs
 node tests/emotion.test.mjs
+node tests/sculpture.test.mjs
+node tests/fragment.test.mjs
 ```
 
-build 包含类型检查，通过后生成 dist/。当前构建有单个脚本超过 500 KB 的体积提示，尚未做拆包优化。AI 只返回受限作品参数，不生成可执行渲染代码，也不提供心理测量。`preview` 可查看静态画面和同地址的本地回廊，但没有 AI/语音后端且通常端口不同；当前请使用 `dev` 联调。生产部署另行安排，存档本轮无新增依赖，没有执行 Git commit 或 push。
+也可以一次跑完全部测试：`node --test tests/*.test.mjs`。
+
+build 包含类型检查，通过后生成 dist/。当前构建有单个脚本超过 500 KB 的体积提示，尚未做拆包优化。AI 只返回受限作品参数，不生成可执行渲染代码，也不提供心理测量。`preview` 可查看静态画面和同地址的本地回廊，但没有 AI/语音后端且通常端口不同；当前请使用 `dev` 联调。线上部署见 [DEPLOY](docs/DEPLOY.md)，网址 https://xianying.art 。
 
 ## 每次开发的固定节奏
 

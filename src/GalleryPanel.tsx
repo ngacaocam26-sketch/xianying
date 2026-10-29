@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { Artwork, ArtworkCard } from './artwork';
 import type { GalleryRepository } from './gallery';
 import { Icon } from './icons';
+import { containRect, COVER_ASPECT, createMemoryFragment, fragmentMask, frameAspect } from './gallery/memoryFragment';
+import type { MemoryFragment } from './gallery/memoryFragment';
+
+const compact = window.matchMedia('(pointer: coarse)').matches || Math.min(window.innerWidth, window.innerHeight) < 600;
 
 function stamp(time: number) {
   const date = new Date(time);
@@ -22,6 +27,12 @@ export default function GalleryPanel({ repository, onOpen, onClose, canOpen }: {
   const alive = useRef(false), serial = useRef(0), pending = useRef(false);
   const closeButton = useRef<HTMLButtonElement>(null);
   const track = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const fragment = useRef<MemoryFragment | null>(null);
+  // 照片作品用存档里的原照片显影，比封面截图清楚，也保留照片原本的比例；读过的留着，来回滑不必再读。
+  const [sources, setSources] = useState<Record<string, { image: string; aspect: number }>>({});
+  // 正在以粒子碎片显示的作品：它的静态封面隐去，只留碎片。
+  const [liveId, setLiveId] = useState<string | null>(null);
   const load = async () => {
     const id = ++serial.current; setLoading(true); setError('');
     try { const result = await repository.list(); if (alive.current && id === serial.current) setCards(result); }
@@ -56,6 +67,51 @@ export default function GalleryPanel({ repository, onOpen, onClose, canOpen }: {
   }, [visible.length, active]);
   useEffect(() => { setActive(0); track.current?.scrollTo({ left: 0 }); }, [removed]);
 
+  useEffect(() => {
+    if (!canvas.current) return;
+    try { fragment.current = createMemoryFragment(canvas.current, compact); }
+    catch { fragment.current = null; }
+    return () => { fragment.current?.dispose(); fragment.current = null; };
+  }, []);
+  const visibleIds = visible.map(card => card.id).join(',');
+  useEffect(() => {
+    let cancelled = false;
+    for (const card of visible) {
+      if (sources[card.id]) continue;
+      void (async () => {
+        let image = card.thumbnail;
+        if (card.kind === 'relief') {
+          try { image = (await repository.get(card.id)).scene.relief?.image ?? image; } catch { /* 读不到原照片时用封面 */ }
+        }
+        const probe = new Image();
+        probe.src = image;
+        try { await probe.decode(); } catch { return; }
+        if (!cancelled && alive.current) setSources(previous => ({ ...previous, [card.id]: { image, aspect: probe.naturalWidth / probe.naturalHeight } }));
+      })();
+    }
+    return () => { cancelled = true; };
+  }, [visibleIds]);
+
+  // 当前作品停稳后（放大过渡结束）再显影成碎片；一滑走就先散去。
+  const currentId = current?.id;
+  const currentSource = current ? sources[current.id] : undefined;
+  useEffect(() => {
+    const live = fragment.current;
+    if (!live || !current) return;
+    live.hide(); setLiveId(null);
+    if (!currentSource) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const stage = canvas.current?.getBoundingClientRect();
+      const figure = track.current?.children[visible.indexOf(current)]?.querySelector('.gallery-figure')?.getBoundingClientRect();
+      if (!stage || !figure) return;
+      const box = { x: figure.left - stage.left, y: figure.top - stage.top, width: figure.width, height: figure.height };
+      live.show({ id: current.id, image: currentSource.image, sculpture: current.kind === 'sculpture' || current.kind === 'nebula' },
+        containRect(box, currentSource.aspect), () => { if (!cancelled) setLiveId(current.id); });
+    }, 560);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [currentId, removed, currentSource]);
+
   const slideWidth = () => (track.current?.firstElementChild as HTMLElement | null)?.offsetWidth ?? 1;
   const go = (index: number) => {
     const next = Math.max(0, Math.min(visible.length - 1, index));
@@ -72,14 +128,15 @@ export default function GalleryPanel({ repository, onOpen, onClose, canOpen }: {
       }}>
       <h1 id="gallery-title" className="sr-only">本地回廊</h1>
       <div className="gallery-bar">
+        <button ref={closeButton} type="button" className="gallery-back" onClick={onClose}><Icon name="left" />返回</button>
         <div className="gallery-tabs" role="group" aria-label="回廊分类">
           <button type="button" aria-pressed={!removed} onClick={() => setRemoved(false)}>作品 {cards.filter(c => c.removedAt === null).length}</button>
           <button type="button" aria-pressed={removed} onClick={() => setRemoved(true)}>已移除 {cards.filter(c => c.removedAt !== null).length}</button>
         </div>
-        <button ref={closeButton} type="button" className="gallery-back" onClick={onClose}>返回作品</button>
       </div>
 
       <div className="gallery-stage">
+        <canvas ref={canvas} className="gallery-fragment" aria-hidden="true" />
         {!loading && !visible.length && <p className="gallery-empty">{removed ? '这里还没有移除的作品。' : <>回廊还空着。<br />凝结一次，再选择留下它。</>}</p>}
         <div className="gallery-track" ref={track} onScroll={() => {
           const node = track.current;
@@ -88,10 +145,17 @@ export default function GalleryPanel({ repository, onOpen, onClose, canOpen }: {
           {visible.map((card, index) => (
             <article className={`gallery-slide${index === active ? ' is-active' : ''}`} key={card.id} aria-current={index === active}>
               <button type="button" className="gallery-figure" tabIndex={index === active ? 0 : -1}
+                style={{ '--frame': frameAspect(sources[card.id]?.aspect ?? COVER_ASPECT) } as CSSProperties}
                 aria-label={index === active ? `打开${card.title}` : `查看${card.title}`}
                 disabled={Boolean(busy) || (index === active && (removed || !canOpen))}
                 onClick={() => { if (index === active) void act(card, 'open'); else go(index); }}>
-                <img src={card.thumbnail} alt="" width="320" height="220" loading="lazy" />
+                {(() => {
+                  const source = sources[card.id];
+                  const mask = `url(${fragmentMask(card.id, card.kind === 'sculpture' || card.kind === 'nebula', source?.aspect ?? COVER_ASPECT)})`;
+                  return <img src={source?.image ?? card.thumbnail} alt="" width="320" height="220" loading="lazy"
+                    className={liveId === card.id && index === active ? 'is-live' : undefined}
+                    style={{ maskImage: mask, WebkitMaskImage: mask }} />;
+                })()}
               </button>
               <h2>{card.title}</h2>
               {card.summary && index === active && <p className="gallery-summary">{card.summary}</p>}

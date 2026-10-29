@@ -24,7 +24,8 @@
 
 1. 阿里云或腾讯云「轻量应用服务器」，地域选**中国香港**，系统镜像选 **Ubuntu 24.04**，最低一档配置即可，按月购买。
 2. 在该服务器的「防火墙」里放行 TCP **80** 和 **443**（22 一般默认已开）。
-3. 设置 root 密码或密钥，记下公网 IP，下文写作 `47.1.2.3`，网址就是 `47-1-2-3.sslip.io`（点换成横线）。
+3. 记下公网 IP，下文写作 `47.1.2.3`，网址就是 `47-1-2-3.sslip.io`（点换成横线）。
+4. 登录方式：本机生成一把部署专用密钥 `ssh-keygen -t ed25519 -f ~/.ssh/xianying_deploy`，在控制台「远程连接」打开网页终端，把公钥追加进 `~/.ssh/authorized_keys`。阿里云轻量 Ubuntu 的默认用户是 `admin`（免密 sudo），下文的服务器命令以 root 身份写，用 `admin` 时在前面加 `sudo`。1 GiB 内存的档位建议再加 1 GB swap（`fallocate -l 1G /swapfile` 等）。
 
 ## 二、服务器上装 Node 24 和 Caddy（只做一次）
 
@@ -93,9 +94,12 @@ journalctl -u xianying -n 20   # 应看到「显影已启动」「已读取 API 
 
 ```text
 47-1-2-3.sslip.io {
+    encode zstd gzip
     reverse_proxy 127.0.0.1:3000
 }
 ```
+
+`encode` 让主程序 JS 压缩后传输（约 860 KB → 250 KB）。
 
 ```bash
 systemctl reload caddy

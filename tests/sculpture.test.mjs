@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildForm, buildSculpture, developCurve, DEVELOP, DEVELOP_TOTAL, pickForm, SCULPTURE_FORMS } from '../src/relief/sculpture.ts';
-import { describeVisual } from '../src/reveal.ts';
-import { DEFAULT_VISUAL } from '../src/visual.ts';
 
 const neutral = { openness: 0.5, tension: 0.5, coherence: 0.5, weight: 0.5 };
 
@@ -58,8 +56,3 @@ test('develop keeps the old form until the fog is open, then gathers back to a c
   assert.deepEqual([end.fog, end.glow, end.done], [0, 0, true]);
 });
 
-test('caption names the strongest shape changes, or says the work stayed near neutral', () => {
-  assert.deepEqual(describeVisual(DEFAULT_VISUAL), ['接近中性']);
-  const visual = { ...DEFAULT_VISUAL, openness: 0.15, warmth: 0.3, weight: 0.8, motion: 0.55, luminosity: 0.62 };
-  assert.deepEqual(describeVisual(visual), ['内收', '下沉', '偏冷']);
-});

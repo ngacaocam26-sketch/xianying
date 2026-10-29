@@ -61,7 +61,10 @@ button svg { display: block; }
   display: flex; align-items: center; gap: 9px; height: 34px; margin: 0; padding: 0 16px;
   border-radius: 999px; font: 13px/1 var(--font-latin), var(--font-serif); letter-spacing: 0.14em; color: rgba(232, 236, 240, 0.85); white-space: nowrap;
 }
-.status-label { font: 12px var(--font-serif); letter-spacing: 0.12em; color: var(--dim); }
+.status-pill { transition: opacity 0.4s; }
+/* 平时没有状态要说时不显示，正在回应、连接或出错时才出现。 */
+.status-pill.is-idle { opacity: 0; }
+.status-label { font: 12px var(--font-serif); letter-spacing: 0.12em; color: rgba(232, 236, 240, 0.85); }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #66717b; flex: none; }
 .status-dot.is-ready { background: #3ddc84; box-shadow: 0 0 10px rgba(61, 220, 132, 0.55); }
 .status-dot.is-busy { background: #e8c48f; box-shadow: 0 0 10px rgba(232, 196, 143, 0.5); animation: pulse 1.4s ease-in-out infinite; }
@@ -164,7 +167,6 @@ button svg { display: block; }
 .meta-pill:hover:not(:disabled) { color: #fff; border-color: rgba(255, 255, 255, 0.16); }
 .meta-pill:disabled { opacity: 0.4; }
 .meta-pill.is-quiet { color: var(--dim); }
-.dock-note { margin: -4px 0 0; text-align: center; font-size: 10px; letter-spacing: 0.08em; color: rgba(204, 212, 219, 0.26); }
 
 /* 显影时刻：雾散开、停顿，凝聚过半（约 1.7 秒）时转译出的造型用词浮现，再淡去。
    宽屏放在作品左侧，像展厅里的作品标签，不压在雕塑上。 */
@@ -175,7 +177,6 @@ button svg { display: block; }
 }
 .reveal-caption p { margin: 0; }
 .reveal-form { font: 300 30px/1.2 var(--font-serif); letter-spacing: 0.3em; color: rgba(242, 245, 247, 0.94); }
-.reveal-words { margin-top: 12px !important; padding-top: 12px; border-top: 1px solid rgba(220, 228, 235, 0.16); font: 300 13px var(--font-serif); letter-spacing: 0.28em; color: rgba(222, 230, 236, 0.72); }
 @keyframes reveal-caption {
   0%, 26% { opacity: 0; filter: blur(8px); }
   38% { opacity: 1; filter: blur(0); }
@@ -191,7 +192,6 @@ button svg { display: block; }
     -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
   }
   .reveal-form { margin: 0 !important; font-size: 18px; letter-spacing: 0.3em; }
-  .reveal-words { margin: 0 !important; padding: 0 0 0 12px; border-top: 0; border-left: 1px solid rgba(220, 228, 235, 0.18); font-size: 12px; letter-spacing: 0.16em; }
 }
 
 /* 凝结：画面先失焦，再清晰定格，卡片随后浮起。 */
@@ -246,6 +246,8 @@ button svg { display: block; }
 .gallery-tabs { display: flex; gap: 22px; }
 .gallery-tabs button, .gallery-back { min-height: 36px; font: 12px var(--font-serif); letter-spacing: 0.18em; color: var(--faint); transition: color 0.3s; }
 .gallery-tabs button[aria-pressed="true"], .gallery-tabs button:hover, .gallery-back:hover { color: var(--ink); }
+.gallery-back { display: flex; align-items: center; gap: 2px; margin-left: -6px; color: var(--dim); }
+.gallery-back svg { width: 18px; height: 18px; }
 .gallery-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
 .gallery-track {
   --slide: min(560px, 76vw);
@@ -255,12 +257,16 @@ button svg { display: block; }
 .gallery-track::-webkit-scrollbar { display: none; }
 .gallery-slide { flex: 0 0 var(--slide); scroll-snap-align: center; text-align: center; opacity: 0.32; transform: scale(0.86); transition: opacity 0.5s ease, transform 0.5s ease; }
 .gallery-slide.is-active { opacity: 1; transform: none; }
-.gallery-figure { display: block; width: 100%; aspect-ratio: 48 / 33; }
+/* 封面框随作品比例变；太高时按比例收窄，比例不变，遮罩才不会被拉伸。 */
+.gallery-figure { --frame: 1.4545; display: block; width: min(100%, calc(50vh * var(--frame))); margin: 0 auto; aspect-ratio: var(--frame); }
 .gallery-figure img {
-  display: block; width: 100%; height: 100%; object-fit: cover;
-  -webkit-mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 52%, transparent 100%);
-  mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 52%, transparent 100%);
+  display: block; width: 100%; height: 100%; object-fit: contain;
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  transition: opacity 0.45s ease;
 }
+/* 当前作品显影成粒子碎片后，静态封面隐去；碎片画在整个展台上，亮尘可以飘出封面框。 */
+.gallery-figure img.is-live { opacity: 0; }
+.gallery-fragment { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
 .gallery-slide h2 { margin: 14px 0 4px; font: 300 18px/1.6 var(--font-serif); letter-spacing: 0.14em; color: var(--ink); overflow-wrap: anywhere; }
 .gallery-slide p { margin: 0; font: 11px var(--font-latin); letter-spacing: 0.24em; color: var(--faint); }
 .gallery-arrow { position: absolute; top: 42%; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; color: var(--dim); transition: color 0.3s; }
@@ -290,7 +296,6 @@ button svg { display: block; }
 .info-content h2 { margin: 0 0 22px; font: 300 18px/1.5 var(--font-serif); letter-spacing: 0.3em; }
 .info-content h2 span { margin-left: 6px; font: 400 15px var(--font-latin); letter-spacing: 0.2em; color: var(--faint); }
 .info-content p { font-size: 13px; line-height: 1.9; }
-.info-content .info-availability { margin-top: 18px; font-size: 12px; color: var(--dim); }
 
 @keyframes pulse { 50% { opacity: 0.45; } }
 @keyframes breathe { 50% { opacity: 0.3; } }
@@ -316,7 +321,7 @@ button svg { display: block; }
 }
 @media (max-height: 560px) {
   .reply-card { max-height: 26vh; padding-top: 12px; }
-  .dock-note, .work-privacy { display: none; }
+  .work-privacy { display: none; }
   .work-time { margin-bottom: 10px; }
   .gallery-panel { padding-top: 58px; }
   .gallery-track { --slide: min(420px, 56vw); }

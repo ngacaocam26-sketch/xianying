@@ -10,17 +10,21 @@ import type { VisualState } from './visual';
 import type { SculptureForm } from './imagery';
 import type { ActivitySignal } from './emotionShape';
 
-// 与 /relief-lab 同一套默认值；触屏和小屏降低密度，保证按压流畅。
+// 比 /relief-lab 更细更密：颗粒小、数量多，表面才细腻。触屏和小屏密度低一档，保证按压流畅。
+// 推开的小洞：手指粗，触屏保持原大；鼠标指得准，桌面缩小约三分之一。
 const compact = window.matchMedia('(pointer: coarse)').matches || Math.min(window.innerWidth, window.innerHeight) < 600;
-const PARAMS = compact ? { ...DEFAULT_RELIEF, density: 380, size: 2 } : DEFAULT_RELIEF;
+const PARAMS = compact ? { ...DEFAULT_RELIEF, density: 480, size: 1.7 } : { ...DEFAULT_RELIEF, density: 560, size: 1.6, radius: 0.16 };
 
-// 顶栏与底部输入条（凝结时为凝结卡片）占用的高度；浮在作品上的回复卡片不计入，流式回复时画面不跳。
+// 顶栏与底部输入条（凝结时为凝结卡片）占用的高度。宽屏上回复卡片浮在作品前，不计入；
+// 竖屏手机两侧没有空位，回复卡片也计入，作品平滑上移缩小，让出卡片的位置。
 function measureInsets(container: HTMLElement) {
   const experience = container.closest('.experience');
   const bounds = container.getBoundingClientRect();
   const header = experience?.querySelector('.site-header');
   const condensed = experience?.classList.contains('is-condensed');
-  const dock = experience?.querySelector(condensed ? '.work-panel' : '.expression:not([hidden]) .composer');
+  const portrait = bounds.width < 640 && bounds.width < bounds.height;
+  const dock = experience?.querySelector(condensed ? '.work-panel'
+    : portrait ? '.expression:not([hidden]) > :first-child' : '.expression:not([hidden]) .composer');
   return {
     top: header ? header.getBoundingClientRect().bottom - bounds.top + 12 : 70,
     bottom: dock ? bounds.bottom - dock.getBoundingClientRect().top + 16 : bounds.height * 0.2,

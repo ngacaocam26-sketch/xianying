@@ -408,6 +408,8 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   let dust: THREE.Points | null = null;
   let targets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
 
+  // 取景目标：第一次直接到位，之后（回复卡片出现、凝结卡片浮起）在几帧里平滑移过去。
+  const framing = { distance: 0, y: 0, ready: false };
   const fitCamera = () => {
     const width = container.clientWidth;
     const height = container.clientHeight;
@@ -425,11 +427,16 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     const available = Math.max(80, height - reserved.top - reserved.bottom);
     const margin = camera.aspect < 0.8 ? 1.02 : insets ? 1.22 : 1.36;
     const distance = Math.max(world.y * margin * height / available / 2 / halfTan, world.x * margin / 2 / halfTan / camera.aspect);
-    camera.position.set(0, 0, distance);
     camera.updateProjectionMatrix();
     const viewHeight = 2 * distance * halfTan;
-    group.position.y = insets ? (0.5 - (reserved.top + height - reserved.bottom) / (2 * height)) * viewHeight
+    framing.distance = distance;
+    framing.y = insets ? (0.5 - (reserved.top + height - reserved.bottom) / (2 * height)) * viewHeight
       : camera.aspect < 0.8 ? 0.15 : 0.05;
+    if (!framing.ready || motion.matches) {
+      camera.position.set(0, 0, framing.distance);
+      group.position.y = framing.y;
+      framing.ready = true;
+    }
     uniforms.uProj.value = height * dpr / (2 * halfTan);
     uniforms.uMinSize.value = 1.5 * dpr;
   };
@@ -626,6 +633,9 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     const delta = previousTime === undefined ? 0 : Math.min((now - previousTime) / 1000, 0.05);
     previousTime = now;
     if (!mode || !targets) return;
+    const settle = motion.matches ? 1 : 1 - Math.exp(-delta * 5);
+    camera.position.z += (framing.distance - camera.position.z) * settle;
+    group.position.y += (framing.y - group.position.y) * settle;
     if (frozen || motion.matches) Object.assign(currentVisual, targetVisual);
     else smoothVisual(currentVisual, targetVisual, delta);
     // 中性参数（0.5）与试验页的画面完全一致。
@@ -763,19 +773,33 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
       if (contextLost || !mode) throw new Error('画面还没有准备好，请稍等再凝结。');
       // 复制前立即绘制一帧：WebGL 默认不保留上一帧的画面。
       renderer.render(scene, camera);
-      const preview = document.createElement('canvas');
-      preview.width = 480;
-      preview.height = 330;
-      const context = preview.getContext('2d');
-      if (!context) throw new Error('暂时无法生成作品预览，请重试。');
-      context.fillStyle = '#040507';
-      context.fillRect(0, 0, preview.width, preview.height);
-      const scale = Math.max(preview.width / canvas.width, preview.height / canvas.height);
-      const width = canvas.width * scale;
-      const height = canvas.height * scale;
-      context.drawImage(canvas, (preview.width - width) / 2, (preview.height - height) / 2, width, height);
-      let thumbnail = preview.toDataURL('image/jpeg', 0.75);
-      if (thumbnail.length > 150_000) thumbnail = preview.toDataURL('image/jpeg', 0.5);
+      // 封面在回廊里会显影成粒子碎片，尽量清楚；文件太大时退回小一档，存档上限 16 万字符。
+      const draw = (previewWidth: number) => {
+        const preview = document.createElement('canvas');
+        preview.width = previewWidth;
+        preview.height = Math.round(previewWidth * 33 / 48);
+        const context = preview.getContext('2d');
+        if (!context) throw new Error('暂时无法生成作品预览，请重试。');
+        context.fillStyle = '#040507';
+        context.fillRect(0, 0, preview.width, preview.height);
+        // 以作品中心对准封面中心。竖屏按宽度完整装进封面，不裁掉雕塑的上下；
+        // 宽屏按顶栏与底部之间作品实际占的高度装满封面，不留大片黑边。
+        const portrait = canvas.width < canvas.height;
+        const reserved = insets?.() ?? { top: 0, bottom: 0 };
+        const ratio = canvas.height / Math.max(1, container.clientHeight);
+        const used = Math.max(1, canvas.height - (reserved.top + reserved.bottom) * ratio);
+        const scale = portrait ? preview.width / (canvas.width * 1.12)
+          : Math.max(preview.width / canvas.width, preview.height / (used * 1.08));
+        const center = group.position.clone().project(camera);
+        const centerY = (1 - center.y) / 2 * canvas.height;
+        const width = canvas.width * scale;
+        const height = canvas.height * scale;
+        context.drawImage(canvas, (preview.width - width) / 2, preview.height / 2 - centerY * scale, width, height);
+        return preview;
+      };
+      let thumbnail = draw(640).toDataURL('image/jpeg', 0.75);
+      if (thumbnail.length > 150_000) thumbnail = draw(480).toDataURL('image/jpeg', 0.75);
+      if (thumbnail.length > 150_000) thumbnail = draw(480).toDataURL('image/jpeg', 0.5);
       return { thumbnail, phase: time, visual: { ...currentVisual } };
     },
     dispose() {

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-type IconName = 'photo' | 'mic' | 'send' | 'stop' | 'close' | 'check' | 'again' | 'left' | 'right';
+type IconName = 'photo' | 'mic' | 'send' | 'stop' | 'close' | 'check' | 'again' | 'left' | 'right' | 'gallery';
 
 const paths: Record<IconName, ReactNode> = {
   photo: <><path d="M8 6 9.5 3.5h5L16 6h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3Z" /><circle cx="12" cy="12.5" r="3.5" /></>,
@@ -12,6 +12,7 @@ const paths: Record<IconName, ReactNode> = {
   again: <><path d="M5 12a7 7 0 1 0 2.1-5" /><path d="M5 4v4h4" /></>,
   left: <path d="m14.5 6-6 6 6 6" />,
   right: <path d="m9.5 6 6 6-6 6" />,
+  gallery: <><rect x="4" y="7" width="12" height="12" rx="2" /><path d="M8 4h9a3 3 0 0 1 3 3v9" /></>,
 };
 
 export function Icon({ name }: { name: IconName }) {

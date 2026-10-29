@@ -12,7 +12,30 @@
     <title>显影 XIAN YING · The Darkroom</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- 脚本下载和启动之前先给一句提示；React 挂载后会替换掉它。 -->
+    <style>
+      html, body { margin: 0; background: #06080c; }
+      .boot { position: fixed; inset: 0; display: grid; place-items: center; padding: 0 28px; text-align: center;
+        font: 300 14px/2.2 "Noto Serif SC", serif; letter-spacing: 0.24em; color: rgba(222, 230, 236, 0.72); }
+      .boot p { margin: 0; animation: boot-breathe 2.4s ease-in-out infinite; }
+      @keyframes boot-breathe { 50% { opacity: 0.45; } }
+    </style>
+    <div id="root"><div class="boot" id="boot"><p>正在显影…</p></div></div>
+    <script>
+      // 脚本出错（内核太旧）或加载太久（网络慢）时，告诉用户换到系统浏览器打开。
+      (function () {
+        var advice = '<br>可以点右上角「···」，选择「在浏览器中打开」。';
+        function say(text) { var boot = document.getElementById('boot'); if (boot) boot.innerHTML = '<p style="animation:none">' + text + '</p>'; }
+        // 只管脚本：国内常加载不了 Google 字体，样式表失败不算打不开。
+        window.addEventListener('error', function (event) {
+          var target = event.target;
+          if (target && target !== window && target.tagName !== 'SCRIPT') return;
+          say('这个浏览器暂时打不开显影。' + advice);
+        }, true);
+        setTimeout(function () { say('网络有点慢，还在加载……' + advice); }, 12000);
+      })();
+    </script>
+    <script nomodule>document.getElementById('boot').innerHTML = '<p>这个浏览器版本太旧，打不开显影。<br>请用手机自带浏览器或微信、Chrome 打开。</p>';</script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

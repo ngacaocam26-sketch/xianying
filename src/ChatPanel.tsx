@@ -113,7 +113,7 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
         (output) => update({ output }), { image: photo?.image, visual, form });
       if (serialRef.current === id) {
         if (result.visual) onVisual(result.visual, result.form ?? null);
-        update({ state: 'done', visualNote: result.visual ? '画面已随这次表达变化' : result.visualWarning });
+        update({ state: 'done', visualNote: result.visual ? undefined : result.visualWarning });
       }
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -170,7 +170,6 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
       <div className="dock-meta">
         <button type="button" className="meta-pill" onClick={() => { stop(); onCondense(); }}>凝结此刻<span aria-hidden="true">›</span></button>
       </div>
-      <p className="dock-note">发送的文字{photo ? '与照片缩略图' : ''}交给阿里云百炼处理 · 详见 INFO</p>
     </section>
   );
 }
