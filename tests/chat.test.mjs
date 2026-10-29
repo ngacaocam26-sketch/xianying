@@ -34,6 +34,14 @@ async function fixture(t, options = {}) {
   };
 }
 
+test('site-wide limits stay conservative by default and can be raised for a public demo', () => {
+  assert.deepEqual(readConfig({}).limits, { text: 2, perMinute: 20, voice: 2 });
+  assert.deepEqual(readConfig({ XIANYING_TEXT_CONCURRENT: '6', XIANYING_TEXT_PER_MINUTE: '60', XIANYING_VOICE_CONCURRENT: '4' }).limits,
+    { text: 6, perMinute: 60, voice: 4 });
+  assert.deepEqual(readConfig({ XIANYING_TEXT_CONCURRENT: 'many', XIANYING_TEXT_PER_MINUTE: '-5', XIANYING_VOICE_CONCURRENT: '99999' }).limits,
+    { text: 2, perMinute: 20, voice: 2 });
+});
+
 test('configuration uses Beijing endpoints and no key is returned by status', async (t) => {
   assert.match(readConfig({}).baseUrl, /^https:\/\/dashscope\.aliyuncs\.com/);
   assert.match(readConfig({ DASHSCOPE_WORKSPACE_ID: 'workspace-example' }).baseUrl,

@@ -34,7 +34,7 @@ export function attachVoiceServer(server, {
   server.on('upgrade', onUpgrade);
   wss.on('connection', (client) => {
     const send = payload => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(payload)); };
-    if (!config.apiKey || cleanups.size >= 2) {
+    if (!config.apiKey || cleanups.size >= (config.limits?.voice ?? 2)) {
       send({ type: 'voice_error', message: config.apiKey ? '当前语音连接较多，请稍后重试。' : '请先配置本机 API Key 并重启项目。' });
       client.close(); return;
     }

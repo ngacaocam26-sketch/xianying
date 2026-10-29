@@ -10,6 +10,11 @@ class ApiError extends Error {
   }
 }
 
+function limit(value, fallback) {
+  const number = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(number) && number > 0 && number <= 1000 ? number : fallback;
+}
+
 export function readConfig(env = process.env) {
   const workspace = (env.DASHSCOPE_WORKSPACE_ID ?? '').trim();
   if (workspace && !/^[a-zA-Z0-9-]+$/.test(workspace)) {
@@ -20,6 +25,12 @@ export function readConfig(env = process.env) {
     model: (env.QWEN_MODEL ?? '').trim() || 'qwen3.8-flash',
     realtimeModel: (env.QWEN_REALTIME_MODEL ?? '').trim() || 'qwen3.8-omni-flash-realtime',
     realtimeVoice: (env.QWEN_REALTIME_VOICE ?? '').trim() || 'Tina',
+    // 全站上限，保护密钥额度：本机默认很保守，公开演示时在服务器上调高。
+    limits: {
+      text: limit(env.XIANYING_TEXT_CONCURRENT, 2),
+      perMinute: limit(env.XIANYING_TEXT_PER_MINUTE, 20),
+      voice: limit(env.XIANYING_VOICE_CONCURRENT, 2),
+    },
     baseUrl: workspace
       ? `https://${workspace}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`
       : 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -136,7 +147,8 @@ function providerError(status) {
 }
 
 export function createApiHandler({
-  config = readConfig(), fetchImpl = fetch, timeoutMs = 45000, maxRequests = 20,
+  config = readConfig(), fetchImpl = fetch, timeoutMs = 45000,
+  maxRequests = config.limits?.perMinute ?? 20, maxActive = config.limits?.text ?? 2,
 } = {}) {
   let active = 0;
   let requests = [];
@@ -195,7 +207,7 @@ export function createApiHandler({
       if (!config.apiKey) throw new ApiError(503, 'NOT_CONFIGURED', '文字对话尚未连接。请在本机 .env 中填入 API Key，并重启项目。');
       const now = Date.now();
       requests = requests.filter((time) => now - time < 60000);
-      if (active >= 2 || requests.length >= maxRequests) {
+      if (active >= maxActive || requests.length >= maxRequests) {
         throw new ApiError(429, 'RATE_LIMIT', '先缓一会儿，稍后再发送。');
       }
       requests.push(now);

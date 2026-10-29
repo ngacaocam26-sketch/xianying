@@ -122,7 +122,20 @@ cd /opt/xianying && tar -xzf /opt/xianying.tgz && npm ci --omit=dev && systemctl
 ## 公开网址的额度保护
 
 - 百炼控制台保持「免费额度用完即停」，比赛期间留意用量。
-- 后端已有全站限制：文字同时 2 个请求、每分钟 20 次；语音同时 2 路。这是保护密钥的上限，多位评委同时使用可能看到「稍后再试」。
+- 后端有全站限制，保护密钥额度。本机默认：文字同时 2 个请求、每分钟 20 次；语音同时 2 路。超过时用户看到「稍后再试」。
+- 公开演示时在服务器上调高（当前线上为 6 / 60 / 4），写在单独的配置里，改完重启即可：
+
+```bash
+sudo mkdir -p /etc/systemd/system/xianying.service.d
+printf "[Service]
+Environment=XIANYING_TEXT_CONCURRENT=6
+Environment=XIANYING_TEXT_PER_MINUTE=60
+Environment=XIANYING_VOICE_CONCURRENT=4
+" | sudo tee /etc/systemd/system/xianying.service.d/limits.conf
+sudo systemctl daemon-reload && sudo systemctl restart xianying
+```
+
+- 数值是全站共用的，不是每个人各自的；调高前先在百炼控制台确认余额与「用完即停」。
 - 赛后可在百炼控制台作废这把密钥，换一把新的。
 
 ## 备用方案
