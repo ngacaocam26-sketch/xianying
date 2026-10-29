@@ -9,12 +9,25 @@ export type ChatStatus = { configured: boolean; provider: string; model: string 
 // form 是大模型挑的意象和名字；variant 由前端随机生成，同一意象每次长得略有不同。
 export type ChatResult = { visual: VisualState | null; form?: SculptureForm | null; visualWarning?: string };
 
-export async function getChatStatus(signal: AbortSignal): Promise<ChatStatus> {
+async function fetchChatStatus(signal: AbortSignal): Promise<ChatStatus> {
   const response = await fetch('/api/status', { signal, cache: 'no-store' });
   if (!response.ok) throw new Error('文字对话服务尚未启动，请重启项目。');
   const status = await response.json();
   if (typeof status.configured !== 'boolean') throw new Error('文字对话服务尚未启动，请重启项目。');
   return status;
+}
+
+// 手机网络偶尔抖一下：第一次没连上，隔一秒半再试一次，才算真的未连接。
+export async function getChatStatus(signal: AbortSignal): Promise<ChatStatus> {
+  try { return await fetchChatStatus(signal); }
+  catch (cause) {
+    if (signal.aborted) throw cause;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 1500);
+      signal.addEventListener('abort', () => { clearTimeout(timer); reject(cause); }, { once: true });
+    });
+    return fetchChatStatus(signal);
+  }
 }
 
 export async function streamChat(

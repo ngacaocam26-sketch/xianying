@@ -89,7 +89,8 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
 
   const send = async (retry?: Turn) => {
     const input = (retry?.input ?? draft).trim() || (photo ? '看看这张照片，和我聊聊。' : '');
-    if (!input || input.length > 2000 || requestRef.current || !status?.configured || checking) return;
+    // 照片还在处理时不发送：此时消息还带不上照片，AI 只能说看不到。
+    if (!input || input.length > 2000 || requestRef.current || !status?.configured || checking || photoBusy) return;
     const id = ++serialRef.current;
     const controller = new AbortController();
     requestRef.current = controller;
@@ -130,7 +131,7 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
       label: turn.state === 'stopped' ? '未完成' : undefined }] : []),
   ]);
   const last = turns[turns.length - 1];
-  const canSend = (Boolean(draft.trim()) || Boolean(photo)) && link === 'ready';
+  const canSend = (Boolean(draft.trim()) || Boolean(photo)) && link === 'ready' && !photoBusy;
 
   return (
     <section className="expression" hidden={!open} aria-label="文字表达"
@@ -155,7 +156,7 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
         </button>
         <label className="sr-only" htmlFor="chat-input">写下此刻想说的话</label>
         <textarea ref={inputRef} id="chat-input" rows={1} maxLength={2000} value={draft}
-          placeholder={photo ? '说说这张照片…' : '此刻，想说些什么…'}
+          placeholder={photoBusy ? '照片正在显影…' : photo ? '说说这张照片…' : '此刻，想说些什么…'}
           onChange={(event) => { setDraft(event.target.value); onActivity(0.45); }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
