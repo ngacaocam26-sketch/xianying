@@ -572,7 +572,9 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   let pressing = false;
   // 按在雕塑上是推开小洞（push）；按在旁边的空白处是转动它（turn）。按下时决定，整个手势不变。
   let dragMode: 'push' | 'turn' | null = null;
-  let spin = 0, lastTurnX = 0;
+  // spin 是用手转出来的附加角度，可以转好几圈；松手后带惯性继续转，再慢慢回到最近的正面。
+  let spin = 0, spinVelocity = 0, lastTurnX = 0, lastTurnTime = 0;
+  const endTurn = () => { if (performance.now() - lastTurnTime > 100) spinVelocity = 0; };
   const overSculpture = () => {
     if (mode !== 'sculpture') return true;
     const center = group.position.clone().project(camera);
@@ -601,8 +603,12 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     updatePointer(event);
     ring.classList.add('is-visible');
     if (dragMode === 'turn') {
-      spin = THREE.MathUtils.clamp(spin + (pointer.x - lastTurnX) * 1.8, -1.3, 1.3);
-      lastTurnX = pointer.x;
+      // 横向拖满整个画面约转 300°。
+      const now = performance.now(), step = (pointer.x - lastTurnX) * 2.6;
+      spin += step;
+      const seconds = Math.max((now - lastTurnTime) / 1000, 0.008);
+      spinVelocity = THREE.MathUtils.clamp(spinVelocity * 0.5 + (step / seconds) * 0.5, -12, 12);
+      lastTurnX = pointer.x; lastTurnTime = now;
     }
   };
   const onPointerDown = (event: PointerEvent) => {
@@ -612,11 +618,12 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     updatePointer(event);
     dragMode = overSculpture() ? 'push' : 'turn';
     pressing = dragMode === 'push';
-    lastTurnX = pointer.x;
+    lastTurnX = pointer.x; lastTurnTime = performance.now(); spinVelocity = 0;
     ring.classList.add('is-visible');
     if (pressing) ring.classList.add('is-pressing');
   };
   const release = () => {
+    if (dragMode === 'turn') endTurn();
     pressing = false;
     dragMode = null;
     pointerInside = false;
@@ -627,6 +634,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     if (capturedPointer !== null && event.pointerId !== capturedPointer) return;
     // 鼠标松开后仍停在画面上，圆环保留；手指抬起就离开了画面。
     if (event.pointerType !== 'mouse') { release(); return; }
+    if (dragMode === 'turn') endTurn();
     pressing = false;
     dragMode = null;
     capturedPointer = null;
@@ -703,8 +711,17 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     // 不整圈转：海浪、花开、雨这些意象是朝正面做的，转到侧面会变成一条线或只剩背面。
     if (mode === 'photo') group.rotation.set(-0.06 + Math.sin(time * 0.17) * 0.025 + tilt.y, Math.sin(time * 0.2) * 0.07 + tilt.x, 0);
     else {
-      // 用手转过之后，松开几秒内慢慢回到自动摆动，不会停在侧面。
-      if (dragMode !== 'turn') spin *= Math.exp(-delta * (motion.matches ? 8 : 0.6));
+      // 用手转过之后：甩出去的惯性慢慢停下，再转回最近的正面接着自动摆动，不会停在侧面。
+      if (dragMode !== 'turn') {
+        if (motion.matches) spinVelocity = 0;
+        spin += spinVelocity * delta;
+        spinVelocity *= Math.exp(-delta * 1.8);
+        if (Math.abs(spinVelocity) < 0.3) {
+          const front = Math.round(spin / (Math.PI * 2)) * Math.PI * 2;
+          spin += (front - spin) * (1 - Math.exp(-delta * (motion.matches ? 8 : 0.8)));
+          if (Math.abs(front - spin) < 1e-3) spin -= front;
+        }
+      }
       group.rotation.set(0.12 + Math.sin(time * 0.13) * 0.06 + tilt.y, Math.sin(time * 0.21) * 0.7 + tilt.x * 1.2 + spin, -0.06);
     }
     group.updateMatrixWorld();
