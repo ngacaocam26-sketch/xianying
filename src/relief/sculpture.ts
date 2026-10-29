@@ -593,12 +593,16 @@ const SCREEN_PUSH_GLSL = /* glsl */ `
     vec2 swellAway = swellLength > 1e-3 ? -swellSlope / swellLength : vec2(cos(scatter), sin(scatter));
     vec2 away = holeLength > 1e-3 ? -holeSlope / holeLength : swellAway;
     float open = 1.0 - sqrt(max(0.0, 1.0 - dent.x));
+    // 约四成颗粒不被完全推走，散在洞里发着微光慢慢飘：像拨开一层雾，而不是挖出一个黑洞。
+    float linger = step(0.6, fract(seed * 7.13));
+    float push = open * mix(1.0, 0.15 + 0.5 * fract(seed * 3.91), linger);
     // 屏幕上移动 1 个单位（画面高度为 2），观察空间要移动 深度 × tan(半视角)。
     float radius = uScreenRadius * -viewPosition.z * uTanHalf;
-    viewPosition.xy += (away * open * (0.8 + 0.45 * fract(seed * 17.3)) + swellAway * 0.45 * dent.y) * radius;
+    vec2 drift = vec2(sin(uTime * 0.9 + seed * 40.0), cos(uTime * 0.7 + seed * 31.0)) * 0.4 * linger * open;
+    viewPosition.xy += (away * push * (0.8 + 0.45 * fract(seed * 17.3)) + drift + swellAway * 0.45 * dent.y) * radius;
     viewPosition.z += radius * (0.5 * dent.y + 0.25 * open);
     tilt = -swellSlope * uScreenRadius * 0.5;
-    return vec2(open, dent.y);
+    return vec2(open * (1.0 + linger * 1.4), dent.y);
   }
 `;
 

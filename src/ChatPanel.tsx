@@ -9,14 +9,17 @@ import type { ReplyLine } from './ReplyCard';
 import { Icon } from './icons';
 import type { TranscriptLine } from './title';
 
+// 用户没有说话、只是用手指拨开作品时，交给 AI 的那一句；对话里也照实显示。
+export const TOUCH_INPUT = '（没有说话，用手指把它拨开了一会儿）';
+
 type Turn = {
   id: number; input: string; output: string;
   state: 'pending' | 'done' | 'error' | 'stopped'; error?: string; visualNote?: string;
 };
 export type ChatLink = 'checking' | 'ready' | 'offline';
 
-export default function ChatPanel({ open, photo, photoBusy, visual, form = null, onVisual, onChoosePhoto, onVoice, onCondense, onActivity, onStatus, onTranscript }: {
-  open: boolean; photo: PhotoContext | null; photoBusy: boolean;
+export default function ChatPanel({ open, photo, photoBusy, visual, form = null, nudge = 0, onVisual, onChoosePhoto, onVoice, onCondense, onActivity, onStatus, onTranscript }: {
+  open: boolean; photo: PhotoContext | null; photoBusy: boolean; nudge?: number;
   visual: VisualState; form?: SculptureForm | null; onVisual: (visual: VisualState, form: SculptureForm | null) => void; onChoosePhoto: () => void; onVoice: () => void;
   onCondense: () => void; onActivity: (level: number) => void; onStatus: (link: ChatLink, busy: boolean) => void;
   onTranscript: (lines: TranscriptLine[]) => void;
@@ -32,6 +35,7 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const statusCallback = useRef(onStatus); statusCallback.current = onStatus;
   const busy = turns.some((turn) => turn.state === 'pending');
+  const touchArmed = useRef(true);
   const link: ChatLink = checking ? 'checking' : status?.configured && !statusError ? 'ready' : 'offline';
 
   useEffect(() => { statusCallback.current(link, busy); }, [link, busy]);
@@ -71,6 +75,13 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
       turn.state === 'pending' ? { ...turn, state: 'stopped' } : turn));
   }, [open]);
 
+  // 用户拨开作品一会儿：AI 主动回应这个动作。正在回复、照片处理中或未连接时不打断。
+  useEffect(() => {
+    if (!nudge || !open || !touchArmed.current || busy || requestRef.current || link !== 'ready' || photoBusy) return;
+    touchArmed.current = false;
+    void send(undefined, TOUCH_INPUT);
+  }, [nudge]);
+
   // 输入框随内容长高，最多四行左右。
   useEffect(() => {
     const input = inputRef.current;
@@ -87,8 +98,8 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
       turn.state === 'pending' ? { ...turn, state: 'stopped' } : turn));
   };
 
-  const send = async (retry?: Turn) => {
-    const input = (retry?.input ?? draft).trim() || (photo ? '看看这张照片，和我聊聊。' : '');
+  const send = async (retry?: Turn, spoken?: string) => {
+    const input = spoken ?? ((retry?.input ?? draft).trim() || (photo ? '看看这张照片，和我聊聊。' : ''));
     // 照片还在处理时不发送：此时消息还带不上照片，AI 只能说看不到。
     if (!input || input.length > 2000 || requestRef.current || !status?.configured || checking || photoBusy) return;
     const id = ++serialRef.current;
@@ -103,7 +114,7 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
       ]);
     const current: Turn = { id, input, output: '', state: 'pending' };
     setTurns([...previous, current]);
-    if (!retry) setDraft('');
+    if (!retry && !spoken) setDraft('');
     const update = (change: Partial<Turn>) => {
       if (serialRef.current === id) {
         setTurns((items) => items.map((turn) => turn.id === id ? { ...turn, ...change } : turn));
@@ -115,6 +126,8 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
       if (serialRef.current === id) {
         if (result.visual) onVisual(result.visual, result.form ?? null);
         update({ state: 'done', visualNote: result.visual ? undefined : result.visualWarning });
+        // 用户自己说过话、AI 回应之后，才允许再因拨开主动问一次，不会一直打扰。
+        if (input !== TOUCH_INPUT) touchArmed.current = true;
       }
     } catch (error) {
       if (!controller.signal.aborted) {

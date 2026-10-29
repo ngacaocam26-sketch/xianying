@@ -38,6 +38,8 @@ export interface ReliefOptions {
   // 主页面传入顶栏与底部输入条占用的像素，画面只在两者之间取景。
   insets?: () => { top: number; bottom: number };
   activity?: { current: ActivitySignal };
+  // 手指正按在作品上拨开时每帧回调一次，参数是这一帧的秒数；App 据此判断用户拨弄了多久。
+  onStroke?: (seconds: number) => void;
 }
 
 export interface ReliefScene {
@@ -308,7 +310,7 @@ function createTarget(width: number, height: number) {
 }
 
 export function createReliefScene(container: HTMLElement, ring: HTMLElement, options: ReliefOptions): ReliefScene {
-  const { onStats, onError, insets, activity } = options;
+  const { onStats, onError, insets, activity, onStroke } = options;
   const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
   renderer.setClearColor(0x040507, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -568,6 +570,17 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   const tilt = new THREE.Vector2();
   let pointerInside = false;
   let pressing = false;
+  // 按在雕塑上是推开小洞（push）；按在旁边的空白处是转动它（turn）。按下时决定，整个手势不变。
+  let dragMode: 'push' | 'turn' | null = null;
+  let spin = 0, lastTurnX = 0;
+  const overSculpture = () => {
+    if (mode !== 'sculpture') return true;
+    const center = group.position.clone().project(camera);
+    const halfTan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), distance = camera.position.z;
+    const dx = (pointer.x - center.x) / ((contentSize.x / 2) / (distance * halfTan * camera.aspect) * 0.85);
+    const dy = (pointer.y - center.y) / ((contentSize.y / 2) / (distance * halfTan) * 0.85);
+    return dx * dx + dy * dy <= 1;
+  };
   let capturedPointer: number | null = null;
   let strength = 0;
 
@@ -587,17 +600,25 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     if (capturedPointer !== null && event.pointerId !== capturedPointer) return;
     updatePointer(event);
     ring.classList.add('is-visible');
+    if (dragMode === 'turn') {
+      spin = THREE.MathUtils.clamp(spin + (pointer.x - lastTurnX) * 1.8, -1.3, 1.3);
+      lastTurnX = pointer.x;
+    }
   };
   const onPointerDown = (event: PointerEvent) => {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
     capturedPointer = event.pointerId;
     canvas.setPointerCapture(event.pointerId);
     updatePointer(event);
-    pressing = true;
-    ring.classList.add('is-visible', 'is-pressing');
+    dragMode = overSculpture() ? 'push' : 'turn';
+    pressing = dragMode === 'push';
+    lastTurnX = pointer.x;
+    ring.classList.add('is-visible');
+    if (pressing) ring.classList.add('is-pressing');
   };
   const release = () => {
     pressing = false;
+    dragMode = null;
     pointerInside = false;
     capturedPointer = null;
     ring.classList.remove('is-visible', 'is-pressing');
@@ -607,6 +628,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     // 鼠标松开后仍停在画面上，圆环保留；手指抬起就离开了画面。
     if (event.pointerType !== 'mouse') { release(); return; }
     pressing = false;
+    dragMode = null;
     capturedPointer = null;
     ring.classList.remove('is-pressing');
   };
@@ -680,7 +702,11 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     // 照片只轻微摆动；雕塑左右摆到约 ±40°，约 30 秒一个来回，让体积和暗缝随角度显出来。
     // 不整圈转：海浪、花开、雨这些意象是朝正面做的，转到侧面会变成一条线或只剩背面。
     if (mode === 'photo') group.rotation.set(-0.06 + Math.sin(time * 0.17) * 0.025 + tilt.y, Math.sin(time * 0.2) * 0.07 + tilt.x, 0);
-    else group.rotation.set(0.12 + Math.sin(time * 0.13) * 0.06 + tilt.y, Math.sin(time * 0.21) * 0.7 + tilt.x * 1.2, -0.06);
+    else {
+      // 用手转过之后，松开几秒内慢慢回到自动摆动，不会停在侧面。
+      if (dragMode !== 'turn') spin *= Math.exp(-delta * (motion.matches ? 8 : 0.6));
+      group.rotation.set(0.12 + Math.sin(time * 0.13) * 0.06 + tilt.y, Math.sin(time * 0.21) * 0.7 + tilt.x * 1.2 + spin, -0.06);
+    }
     group.updateMatrixWorld();
 
     let onSurface = false;
@@ -707,6 +733,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     // 孔像一颗有分量的球，略微落后于光标。
     currentUv.lerp(targetUv, 1 - Math.exp(-delta * 7));
     strength += ((pressing && onSurface ? 1 : 0) - strength) * (1 - Math.exp(-delta * 8));
+    if (pressing && onSurface && !frozen && delta > 0) onStroke?.(delta);
 
     stampUniforms.uPrevious.value = targets[0].texture;
     stampUniforms.uWorld.value.copy(mode === 'photo' ? uniforms.uWorld.value : uniforms.uScreen.value);

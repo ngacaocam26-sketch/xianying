@@ -32,13 +32,16 @@ function measureInsets(container: HTMLElement) {
 }
 
 // 新画法的 React 外壳：有照片时显示照片浮雕，没有照片时显示默认雕塑。
-export default function ReliefView({ photo, visual, form = null, snapshot = null, active = true, activity, develop = 0, ref }: {
+export default function ReliefView({ photo, visual, form = null, snapshot = null, active = true, activity, develop = 0, onStroke, ref }: {
   photo: ReliefPhoto | null; visual: VisualState; form?: SculptureForm | null; snapshot?: SceneSnapshot | null; active?: boolean;
   activity?: { current: ActivitySignal };
+  // 手指按在作品上拨开时每帧回调，参数是秒数。
+  onStroke?: (seconds: number) => void;
   // 每次 AI 给出新参数时加一，触发一次显影（散开再凝聚）。
   develop?: number; ref?: Ref<ParticleSceneHandle>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const strokeRef = useRef(onStroke); strokeRef.current = onStroke;
   const ringRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<ReliefScene | null>(null);
   const visualRef = useRef(visual);
@@ -63,7 +66,8 @@ export default function ReliefView({ photo, visual, form = null, snapshot = null
     if (!container || !ring) return;
     let scene: ReliefScene;
     try {
-      scene = createReliefScene(container, ring, { params: PARAMS, onError: setError, insets: () => measureInsets(container), activity });
+      scene = createReliefScene(container, ring, { params: PARAMS, onError: setError, insets: () => measureInsets(container), activity,
+        onStroke: seconds => strokeRef.current?.(seconds) });
     } catch {
       setError('暂时无法显示照片。请开启浏览器硬件加速后刷新页面。');
       return;

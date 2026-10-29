@@ -81,6 +81,14 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
   const infoRef = useRef<HTMLDialogElement>(null);
   const stageRef = useRef<HTMLElement>(null);
   const expressing = !snapshot && !galleryOpen;
+  // 拨开：手指在作品上累计拨弄约 2.5 秒，就告诉文字对话一次，让 AI 主动回应这个动作。
+  const strokeSeconds = useRef(0);
+  const [nudge, setNudge] = useState(0);
+  const onStroke = (seconds: number) => {
+    if (!expressing || voiceOpen) return;
+    strokeSeconds.current += seconds;
+    if (strokeSeconds.current >= 2.5) { strokeSeconds.current = 0; setNudge(value => value + 1); }
+  };
   // 画面上的意象：还没表达时是开场的雾；回廊里没有记录意象的旧作品交给参数规则恢复。
   // 交给模型的仍是 form，开场的雾不算用户此刻的感受。
   const legacySculpture = snapshot?.kind === 'sculpture' && !snapshot.form;
@@ -285,7 +293,7 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
       <main className="scene-stage" ref={stageRef} aria-label="显影互动暗房" aria-hidden={galleryOpen}>
         {photo || snapshot?.kind === 'nebula'
           ? <ParticleScene ref={sceneRef} photo={photo} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} />
-          : <ReliefView ref={sceneRef} photo={relief} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} form={shownForm} develop={developId} />}
+          : <ReliefView ref={sceneRef} photo={relief} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} form={shownForm} develop={developId} onStroke={onStroke} />}
       </main>
       {caption && expressing && <div key={caption.id} className="reveal-caption" role="status" aria-live="polite">
         <p className="reveal-form">{caption.name}</p>
@@ -298,7 +306,7 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
         aria-label="选择本地照片" onChange={selectPhoto} />
       <div className="dock-area" hidden={!expressing}>
         <ChatPanel key={`${expressionId}:${photoContext?.id ?? 'text'}`} open={expressing && !voiceOpen} photo={photoContext} photoBusy={photoLoading}
-          visual={visual} form={form} onVisual={revealVisual} onCondense={condense} onActivity={indicateActivity}
+          visual={visual} form={form} onVisual={revealVisual} onCondense={condense} onActivity={indicateActivity} nudge={nudge}
           onChoosePhoto={() => photoInputRef.current?.click()} onVoice={() => { setNotice(null); setVoiceOpen(true); }}
           onStatus={(link, busy) => setChatState(previous => previous.link === link && previous.busy === busy ? previous : { link, busy })}
           onTranscript={lines => { transcriptRef.current.text = lines; }} />
