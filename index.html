@@ -32,7 +32,9 @@
           if (target && target !== window && target.tagName !== 'SCRIPT') return;
           say('这个浏览器暂时打不开显影。' + advice);
         }, true);
-        setTimeout(function () { say('网络有点慢，还在加载……' + advice); }, 12000);
+        // 服务器在香港，晚高峰时第一次打开可能要半分钟：先说明还在加载，等久了再建议换网络。
+        setTimeout(function () { say('网络有点慢，还在加载……<br>服务器在香港，第一次打开可能要半分钟。'); }, 10000);
+        setTimeout(function () { say('还在加载……<br>可以切换一下 Wi-Fi 和流量再试，<br>或点右上角「···」用系统浏览器打开。'); }, 45000);
       })();
     </script>
     <script nomodule>document.getElementById('boot').innerHTML = '<p>这个浏览器版本太旧，打不开显影。<br>请用手机自带浏览器或微信、Chrome 打开。</p>';</script>

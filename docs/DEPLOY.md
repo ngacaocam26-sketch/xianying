@@ -93,11 +93,19 @@ journalctl -u xianying -n 20   # 应看到「显影已启动」「已读取 API 
 `nano /etc/caddy/Caddyfile`，整个替换为（换成自己的 IP）：
 
 ```text
+{
+    servers {
+        protocols h1 h2
+    }
+}
+
 47-1-2-3.sslip.io {
     encode zstd gzip
     reverse_proxy 127.0.0.1:3000
 }
 ```
+
+`protocols h1 h2` 关掉 HTTP/3：国内网络常限速或丢弃 UDP，浏览器切到 QUIC 后可能卡住。
 
 `encode` 让主程序 JS 压缩后传输（约 860 KB → 250 KB）。
 
