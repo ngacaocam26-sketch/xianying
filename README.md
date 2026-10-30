@@ -5,6 +5,7 @@
 一间情绪暗房：用文字、语音或一张照片说出此刻的感受，AI 从 12 种意象中为它选形、命名，显影成可以触碰、凝结留存或让它散去的粒子雕塑。不打分、不贴标签，让说不清的情绪先被看见。
 
 - **在线体验**：<https://xianying.art>（服务器在香港，晚高峰第一次打开可能需要半分钟；建议用手机自带浏览器或电脑 Chrome / Edge）
+- **演示视频**：<https://www.bilibili.com/video/BV13cxv6DEAN>（B 站，2 分 29 秒）
 - **作品说明**：[PROJECT_INTRO](docs/PROJECT_INTRO.md)：体验流程、作品亮点、技术实现、隐私与伦理、测试与已知限制
 - **本地运行**：Node.js 24，`npm ci` 后在 `.env` 写入 `DASHSCOPE_API_KEY`，再 `npm run dev`；详见作品说明第八节
 - **技术栈**：React + TypeScript + Vite + Three.js（自写 GLSL 粒子着色器）· Node 服务 · 阿里云百炼 Qwen 文字 / 看图 / 实时语音

@@ -4,7 +4,7 @@
 
 - **在线体验**：<https://xianying.art>（服务器在香港，晚高峰第一次打开可能需要半分钟；建议用手机自带浏览器或电脑 Chrome / Edge 打开）
 - **代码仓库**：<https://github.com/ngacaocam26-sketch/xianying>
-- **演示视频**：见提交附件（不超过 3 分钟）
+- **演示视频**：<https://www.bilibili.com/video/BV13cxv6DEAN>（2 分 29 秒）
 - **开发者**：黄新意（独立开发）
 
 ## 一、一句话介绍
