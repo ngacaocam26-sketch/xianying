@@ -9,6 +9,7 @@ import { imageIndex } from '../imagery';
 import type { ImageId } from '../imagery';
 import { findPalette } from '../palette';
 import type { SculptureColor } from '../palette';
+import { applyTurn, dragTurn } from './turn';
 
 // 雕塑的小洞以屏幕为准：试验页的孔半径 0.24（照片宽 5）约等于画面高度的 1/20。
 const SCREEN_RADIUS_PER_WORLD = 0.42;
@@ -583,9 +584,12 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   let pressing = false;
   // 按在雕塑上是推开小洞（push）；按在旁边的空白处是转动它（turn）。按下时决定，整个手势不变。
   let dragMode: 'push' | 'turn' | null = null;
-  // spin 是用手转出来的附加角度，可以转好几圈；松手后带惯性继续转，再慢慢回到最近的正面。
-  let spin = 0, spinVelocity = 0, lastTurnX = 0, lastTurnTime = 0;
-  const endTurn = () => { if (performance.now() - lastTurnTime > 100) spinVelocity = 0; };
+  // turn 是用手转出来的附加朝向，叠在自动摆动之上：左右、上下、斜着都能转，可以转好几圈；
+  // 松手后带惯性继续转（turnVelocity 的方向是转轴、长度是每秒弧度），再慢慢回到正面。
+  const turn = new THREE.Quaternion(), turnVelocity = new THREE.Vector3(), turnDelta = new THREE.Vector3();
+  const sway = new THREE.Euler(), swayQuaternion = new THREE.Quaternion(), front = new THREE.Quaternion();
+  let lastTurnX = 0, lastTurnY = 0, lastTurnTime = 0;
+  const endTurn = () => { if (performance.now() - lastTurnTime > 100) turnVelocity.set(0, 0, 0); };
   const overSculpture = () => {
     if (mode !== 'sculpture') return true;
     const center = group.position.clone().project(camera);
@@ -614,12 +618,12 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     updatePointer(event);
     ring.classList.add('is-visible');
     if (dragMode === 'turn') {
-      // 横向拖满整个画面约转 300°。
-      const now = performance.now(), step = (pointer.x - lastTurnX) * 2.6;
-      spin += step;
+      const now = performance.now();
+      dragTurn(pointer.x - lastTurnX, pointer.y - lastTurnY, camera.aspect, turnDelta);
+      applyTurn(turn, turnDelta);
       const seconds = Math.max((now - lastTurnTime) / 1000, 0.008);
-      spinVelocity = THREE.MathUtils.clamp(spinVelocity * 0.5 + (step / seconds) * 0.5, -12, 12);
-      lastTurnX = pointer.x; lastTurnTime = now;
+      turnVelocity.multiplyScalar(0.5).addScaledVector(turnDelta, 0.5 / seconds).clampLength(0, 12);
+      lastTurnX = pointer.x; lastTurnY = pointer.y; lastTurnTime = now;
     }
   };
   const onPointerDown = (event: PointerEvent) => {
@@ -629,7 +633,7 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     updatePointer(event);
     dragMode = overSculpture() ? 'push' : 'turn';
     pressing = dragMode === 'push';
-    lastTurnX = pointer.x; lastTurnTime = performance.now(); spinVelocity = 0;
+    lastTurnX = pointer.x; lastTurnY = pointer.y; lastTurnTime = performance.now(); turnVelocity.set(0, 0, 0);
     ring.classList.add('is-visible');
     if (pressing) ring.classList.add('is-pressing');
   };
@@ -733,16 +737,17 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     else {
       // 用手转过之后：甩出去的惯性慢慢停下，再转回最近的正面接着自动摆动，不会停在侧面。
       if (dragMode !== 'turn') {
-        if (motion.matches) spinVelocity = 0;
-        spin += spinVelocity * delta;
-        spinVelocity *= Math.exp(-delta * 1.8);
-        if (Math.abs(spinVelocity) < 0.3) {
-          const front = Math.round(spin / (Math.PI * 2)) * Math.PI * 2;
-          spin += (front - spin) * (1 - Math.exp(-delta * (motion.matches ? 8 : 0.8)));
-          if (Math.abs(front - spin) < 1e-3) spin -= front;
+        if (motion.matches) turnVelocity.set(0, 0, 0);
+        applyTurn(turn, turnVelocity, delta);
+        turnVelocity.multiplyScalar(Math.exp(-delta * 1.8));
+        if (turnVelocity.length() < 0.3) {
+          // 沿最短的路回到正面：整圈转过来的不会倒着退回去。
+          turn.slerp(front, 1 - Math.exp(-delta * (motion.matches ? 8 : 0.8)));
+          if (turn.angleTo(front) < 1e-3) turn.identity();
         }
       }
-      group.rotation.set(0.12 + Math.sin(time * 0.13) * 0.06 + tilt.y, Math.sin(time * 0.21) * 0.7 + tilt.x * 1.2 + spin, -0.06);
+      sway.set(0.12 + Math.sin(time * 0.13) * 0.06 + tilt.y, Math.sin(time * 0.21) * 0.7 + tilt.x * 1.2, -0.06);
+      group.quaternion.multiplyQuaternions(turn, swayQuaternion.setFromEuler(sway));
     }
     group.updateMatrixWorld();
 
