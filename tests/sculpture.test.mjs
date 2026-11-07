@@ -18,8 +18,9 @@ test('every imagery form fills the same particle set, stays finite, fits the fra
   const count = 6000;
   assert.equal(SCULPTURE_FORMS.length, 12);
   for (let k = 0; k < SCULPTURE_FORMS.length; k++) {
-    const { packed, normals, flow, spacing } = buildForm(k, count);
+    const { packed, normals, flow, heart, spacing } = buildForm(k, count);
     assert.equal(packed.length, count * 4);
+    assert.equal(heart.length, count);
     assert.equal(normals.length, count * 3);
     assert.equal(flow.length, count);
     let maxX = 0, maxY = 0;
@@ -29,6 +30,8 @@ test('every imagery form fills the same particle set, stays finite, fits the fra
       const w = packed[i * 4 + 3];
       assert.ok((w >= 0 && w <= 1) || (w >= 2 && w <= 3), `packed ao/sided ${w}`);
       assert.ok(Math.abs(Math.hypot(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]) - 1) < 1e-3, SCULPTURE_FORMS[k]);
+      // 配色里透出来的光按 heart 分布；NaN 或越界会让颗粒发黑或过曝。
+      assert.ok(heart[i] >= 0 && heart[i] <= 1, `${SCULPTURE_FORMS[k]} heart ${heart[i]}`);
     }
     assert.ok(maxX <= 2.31 && maxY <= 1.66, `${SCULPTURE_FORMS[k]} fits frame (${maxX}, ${maxY})`);
     assert.ok(spacing > 0 && Number.isFinite(spacing));

@@ -11,7 +11,11 @@ import type { SceneSnapshot } from './artwork';
 import { activityLevel, writeEmotionRest } from './emotionShape';
 import type { ActivitySignal } from './emotionShape';
 
-export type ParticleSceneHandle = { capture: () => { scene: SceneSnapshot; thumbnail: string } };
+export type ParticleSceneHandle = {
+  capture: () => { scene: SceneSnapshot; thumbnail: string };
+  // 冲印时按相纸大小重画一张；旧版画法没有这一项，冲印退回用封面截图。
+  renderStill?: (width: number, height: number) => HTMLCanvasElement;
+};
 
 const PARTICLE_COUNT = 22_000;
 const POINTER_RADIUS = 0.95;

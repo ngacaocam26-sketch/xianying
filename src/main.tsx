@@ -5,11 +5,13 @@ import './style.css';
 
 const ShapeStudies = lazy(() => import('./studies/ShapeStudies'));
 const ReliefLab = lazy(() => import('./lab/ReliefLab'));
+const ColorLab = lazy(() => import('./lab/ColorLab'));
 const path = window.location.pathname.replace(/\/$/, '');
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     {path === '/shape-studies' ? <Suspense fallback={null}><ShapeStudies /></Suspense>
-      : path === '/relief-lab' ? <Suspense fallback={null}><ReliefLab /></Suspense> : <App />}
+      : path === '/relief-lab' ? <Suspense fallback={null}><ReliefLab /></Suspense>
+      : path === '/color-lab' ? <Suspense fallback={null}><ColorLab /></Suspense> : <App />}
   </StrictMode>,
 );

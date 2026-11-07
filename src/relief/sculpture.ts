@@ -42,12 +42,16 @@ export function developCurve(seconds: number) {
 }
 
 type Vec3 = [number, number, number];
-type Patch = { fn: (u: number, v: number, out: Vec3) => void; sided: boolean; inside?: (u: number, v: number, out: Vec3) => void };
+// heart 是这一块离形体“里面”有多近（0—1），配色里透出来的光从这里出来；不写时按离形体中心的距离算。
+type Patch = {
+  fn: (u: number, v: number, out: Vec3) => void; sided: boolean; inside?: (u: number, v: number, out: Vec3) => void;
+  heart?: (u: number, v: number) => number;
+};
 // flow 是每颗粒子在形态里的位置参数（沿火苗的高度、雨滴的相位、漩涡的高度等），供动态使用。
 // spacing 给体积类形态（雨、雾）直接指定颗粒间距；fit 为 false 时坐标已按画框设计，不再缩放。
 type FormSample = {
   positions: Float32Array; normals: Float32Array; ao: Float32Array; sided: Float32Array; flow: Float32Array;
-  area: number; spacing?: number; fit?: boolean;
+  area: number; spacing?: number; fit?: boolean; heart?: Float32Array;
 };
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -77,6 +81,7 @@ function samplePatches(patches: Patch[], count: number, random: () => number): F
   const total = stats.reduce((value, item) => value + item.area, 0);
   const positions = new Float32Array(count * 3), normals = new Float32Array(count * 3);
   const ao = new Float32Array(count).fill(1), sided = new Float32Array(count), flow = new Float32Array(count);
+  const heart = new Float32Array(count).fill(-1);
   let index = 0;
   patches.forEach((patch, k) => {
     const target = k === patches.length - 1 ? count : Math.min(count, index + Math.round(count * stats[k].area / total));
@@ -93,10 +98,11 @@ function samplePatches(patches: Patch[], count: number, random: () => number): F
       normals[index * 3] = n[0] * scale; normals[index * 3 + 1] = n[1] * scale; normals[index * 3 + 2] = n[2] * scale;
       sided[index] = patch.sided ? 1 : 0;
       flow[index] = u;
+      if (patch.heart) heart[index] = patch.heart(u, v);
       index++;
     }
   });
-  return { positions, normals, ao, sided, flow, area: total };
+  return { positions, normals, ao, sided, flow, area: total, heart };
 }
 
 // 凝聚：几块软体挤成一团，只保留并集的外表面，块与块之间的缝隙压暗。
@@ -196,6 +202,8 @@ function braidPatches(): Patch[] {
     };
     return {
       sided: false,
+      // 配色里第二股整股是透出来的那种颜色：矛盾是两种感受拧在一起。
+      heart: () => phase === 0 ? 0 : 1,
       inside: (u: number, _v: number, out: Vec3) => { axis(u, out); },
       fn: (u: number, v: number, out: Vec3) => {
         axis(u, out);
@@ -440,6 +448,8 @@ function bloomPatches(): Patch[] {
     const angle = (k + layer.offset) / layer.count * Math.PI * 2;
     return {
       sided: true,
+      // 花瓣根部最靠里，往瓣尖渐渐淡出。
+      heart: (u: number) => (1 - u) ** 2,
       fn: (u: number, v: number, out: Vec3) => {
         const across = v * 2 - 1;
         const w = layer.width * Math.sin(Math.PI * Math.min(1, u * 1.05)) ** 0.7 * (1 - 0.25 * u);
@@ -453,6 +463,7 @@ function bloomPatches(): Patch[] {
   }));
   const center: Patch = {
     sided: false,
+    heart: () => 1,
     inside: (_u, _v, out) => { out[0] = 0; out[1] = -0.55; out[2] = 0; tilt(out); },
     fn: (u, v, out) => {
       const theta = u * Math.PI * 2, z = v * 2 - 1, ring = Math.sqrt(Math.max(0, 1 - z * z));
@@ -500,7 +511,24 @@ const SAMPLERS: ((count: number, random: () => number) => FormSample)[] = [
 ];
 
 // 一种形态在显卡上的数据：xyz 位置 + w 打包缝隙暗度（0–1）与是否双面（+2）；法线；flow；颗粒间距。
-export type BuiltForm = { packed: Float32Array; normals: Float32Array; flow: Float32Array; spacing: number };
+export type BuiltForm = { packed: Float32Array; normals: Float32Array; flow: Float32Array; heart: Float32Array; spacing: number };
+
+// 没有指定 heart 的颗粒按离形体中心的距离算：越靠中心越接近 1。
+function fillHeart(form: FormSample, count: number) {
+  const heart = form.heart ?? new Float32Array(count).fill(-1);
+  const { positions } = form;
+  let cx = 0, cy = 0, cz = 0;
+  for (let i = 0; i < count; i++) { cx += positions[i * 3]; cy += positions[i * 3 + 1]; cz += positions[i * 3 + 2]; }
+  cx /= count; cy /= count; cz /= count;
+  const distance = new Float32Array(count);
+  let far = 1e-6;
+  for (let i = 0; i < count; i++) {
+    distance[i] = Math.hypot(positions[i * 3] - cx, positions[i * 3 + 1] - cy, positions[i * 3 + 2] - cz);
+    far = Math.max(far, distance[i]);
+  }
+  for (let i = 0; i < count; i++) if (heart[i] < 0) heart[i] = (1 - distance[i] / far) ** 2;
+  return heart;
+}
 
 // 每种形态各用固定种子，按需生成：同一种形态每次生成的坐标完全相同，回廊恢复时一致。
 export function buildForm(index: number, count: number): BuiltForm {
@@ -512,7 +540,8 @@ export function buildForm(index: number, count: number): BuiltForm {
     packed[i * 4 + 3] = form.ao[i] + form.sided[i] * 2;
   }
   // 各形态面积不同，颗粒间距按形态计算，表面始终连成一片。
-  return { packed, normals: form.normals, flow: form.flow, spacing: form.spacing ?? Math.sqrt(form.area / count) * 1.3 };
+  return { packed, normals: form.normals, flow: form.flow, heart: fillHeart(form, count),
+    spacing: form.spacing ?? Math.sqrt(form.area / count) * 1.3 };
 }
 
 // 粒子有 A、B 两个槽位：显示一种形态时只用一个槽，换形态时新形态写进另一个槽，雾里从旧槽流到新槽。
@@ -523,6 +552,7 @@ export function buildSculpture(count: number, dustCount: number) {
     core.setAttribute(`aP${slot}`, new THREE.BufferAttribute(new Float32Array(count * 4), 4));
     core.setAttribute(`aN${slot}`, new THREE.BufferAttribute(new Float32Array(count * 3), 3));
     core.setAttribute(`aF${slot}`, new THREE.BufferAttribute(new Float32Array(count), 1));
+    core.setAttribute(`aH${slot}`, new THREE.BufferAttribute(new Float32Array(count), 1));
   }
   core.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
   const seeds = new Float32Array(count);
@@ -556,7 +586,8 @@ export function buildSculpture(count: number, dustCount: number) {
   // 把一种形态写进 A 或 B 槽，返回它的颗粒间距。
   const load = (slot: 'A' | 'B', index: number) => {
     const built = form(index);
-    for (const [name, data] of [[`aP${slot}`, built.packed], [`aN${slot}`, built.normals], [`aF${slot}`, built.flow]] as const) {
+    for (const [name, data] of [[`aP${slot}`, built.packed], [`aN${slot}`, built.normals], [`aF${slot}`, built.flow],
+      [`aH${slot}`, built.heart]] as const) {
       const attribute = core.getAttribute(name) as THREE.BufferAttribute;
       (attribute.array as Float32Array).set(data);
       attribute.needsUpdate = true;
@@ -615,6 +646,13 @@ const SHARED_GLSL = /* glsl */ `
   uniform float uMinSize;
   uniform float uLight;
   uniform vec3 uTint;
+  // 配色：受光主色、背光深色、透出来的光；uVivid 为 0 时是原来的单色，1 是配色本来的颜色。
+  uniform vec3 uColorLit;
+  uniform vec3 uColorShade;
+  uniform vec3 uColorGlow;
+  uniform float uVivid;
+  // 有配色时，偏负面的作品（明暗低于中性）整体压暗：浅色偏正面、深色偏负面。单色不受影响。
+  uniform float uColorDepth;
   // x 开放、y 张力、z 连贯、w 轻重；0.5 是中性。
   uniform vec4 uShape;
   // 显影：AI 给出新参数时，粒子先散成雾（0→1），再凝聚成新形态（1→0）。
@@ -633,8 +671,8 @@ export const sculptureCoreVertex = /* glsl */ `
   uniform vec4 uVariantB;
   // 火焰偏暖时火舌带一点琥珀色，0 为单色。
   uniform float uHeat;
-  attribute vec4 aPA; attribute vec3 aNA; attribute float aFA;
-  attribute vec4 aPB; attribute vec3 aNB; attribute float aFB;
+  attribute vec4 aPA; attribute vec3 aNA; attribute float aFA; attribute float aHA;
+  attribute vec4 aPB; attribute vec3 aNB; attribute float aFB; attribute float aHB;
   attribute float aSeed;
   varying vec3 vColor;
 
@@ -697,6 +735,7 @@ export const sculptureCoreVertex = /* glsl */ `
   void main() {
     vec3 p = vec3(0.0), n = vec3(0.0);
     float ao = 0.0, sided = 0.0, fade = 0.0, heatHeight = 0.0;
+    float heart = aHA * (1.0 - uMix) + aHB * uMix;
     if (uMix < 1.0) {
       vec3 pa = aPA.xyz, na = aNA;
       float fa = 1.0, aoA, sidedA;
@@ -767,8 +806,21 @@ export const sculptureCoreVertex = /* glsl */ `
     float spec = pow(max(reflect(-light, viewNormal).z, 0.0), 28.0);
     float shade = (0.12 + 0.62 * diffuse + 0.28 * wrap) * mix(0.3, 1.0, ao);
     vec3 surface = mix(vec3(0.2, 0.25, 0.34), vec3(0.9, 0.93, 0.96), clamp(shade, 0.0, 1.0)) * (0.35 + 0.65 * shade);
-    vColor = (surface + rim * 0.22 * vec3(0.7, 0.85, 1.0) + spec * 0.3) * (0.92 + 0.14 * fract(aSeed * 91.7));
-    vColor *= mix(vec3(1.0), vec3(1.35, 0.82, 0.5), uHeat * (0.35 + 0.65 * heatHeight));
+    float grain = 0.92 + 0.14 * fract(aSeed * 91.7);
+    vec3 mono = (surface + rim * 0.22 * vec3(0.7, 0.85, 1.0) + spec * 0.3) * grain;
+    // 配色：受光面是主色，背光沉到深色；缝隙和形体里面（花心、花瓣根部）透出另一种光，轮廓也带一点。
+    vec3 body = mix(uColorShade, uColorLit, clamp(shade, 0.0, 1.0)) * (0.45 + 0.55 * shade);
+    float inner = max(1.0 - ao, heart);
+    vec3 hue = mix(body, uColorGlow * (0.7 + 0.5 * shade), inner * 0.85) + uColorGlow * rim * 0.3 + uColorLit * spec * 0.15;
+    hue *= grain * uColorDepth;
+    // 鲜艳度低时在配色自己的明暗上变灰，而不是变白：灰而暗才读作低落，变白会读成轻松。
+    float luma = dot(hue, vec3(0.2126, 0.7152, 0.0722));
+    vec3 tone = mix(vec3(luma), hue, 0.3 + 0.7 * uVivid);
+    // 鲜艳度刚离开 0 时从单色过渡到配色；在接近人眼感受的空间里混合（先开方再平方），一点白不会把深色洗成粉。
+    vec3 blended = mix(sqrt(max(mono, 0.0)), sqrt(max(tone, 0.0)), smoothstep(0.0, 0.25, uVivid));
+    vColor = blended * blended;
+    // 火焰的琥珀色只属于单色：有了配色，火的颜色由配色决定。
+    vColor *= mix(vec3(1.0), vec3(1.35, 0.82, 0.5), uHeat * (1.0 - uVivid) * (0.35 + 0.65 * heatHeight));
     vColor *= (1.0 + pushed.x * 0.6 + pushed.y * 0.15) * uTint * uLight;
     vColor *= 1.0 - 0.3 * uDevelop;
     float pointSize = uSpacing * uSize * (0.85 + 0.3 * fract(aSeed * 13.1)) * uProj / -viewPosition.z;
@@ -795,7 +847,8 @@ export const sculptureDustVertex = /* glsl */ `
     pushAway(viewPosition, seed, tilt);
     gl_Position = projectionMatrix * viewPosition;
     float twinkle = 0.6 + 0.4 * sin(uTime * (0.6 + seed) + seed * 40.0);
-    vColor = mix(vec3(0.55, 0.68, 0.85), vec3(0.85, 0.92, 0.98), fract(seed * 7.3)) * uTint * uLight;
+    vec3 mono = mix(vec3(0.55, 0.68, 0.85), vec3(0.85, 0.92, 0.98), fract(seed * 7.3));
+    vColor = mix(mono, mix(uColorLit, uColorGlow, fract(seed * 7.3)), uVivid * 0.8) * uTint * uLight;
     vAlpha = 0.18 * twinkle * min(1.0, 0.3 + uSpread);
     gl_PointSize = clamp(uSpacing * uSize * (0.5 + 0.8 * fract(seed * 6.1)) * uProj / -viewPosition.z, uMinSize * 0.8, 5.0);
   }

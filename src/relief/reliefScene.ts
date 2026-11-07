@@ -7,6 +7,8 @@ import { seededRandom } from './random';
 import { buildSculpture, developCurve, formBehavior, pickForm, sculptureCoreVertex, sculptureDustVertex } from './sculpture';
 import { imageIndex } from '../imagery';
 import type { ImageId } from '../imagery';
+import { findPalette } from '../palette';
+import type { SculptureColor } from '../palette';
 
 // 雕塑的小洞以屏幕为准：试验页的孔半径 0.24（照片宽 5）约等于画面高度的 1/20。
 const SCREEN_RADIUS_PER_WORLD = 0.42;
@@ -51,6 +53,8 @@ export interface ReliefScene {
   setVisual: (visual: VisualState) => void;
   // 大模型选出的意象；null 时按参数规则从最早的五种形态里选（旧作品与默认状态）。
   setForm: (form: { image: ImageId; variant: number } | null) => void;
+  // 雕塑的配色；null 回到单色光雕。颜色在几秒里慢慢变过去，immediate 时直接到位；照片不受影响。
+  setColor: (color: SculptureColor | null, immediate?: boolean) => void;
   // AI 给出新参数后调用：雕塑先散成雾再凝聚成新形态，照片边缘散开再收回。
   develop: () => void;
   // 凝结后时间停住，仍可以拨动；phase 用于从回廊恢复同一刻。
@@ -58,6 +62,8 @@ export interface ReliefScene {
   setActive: (active: boolean) => void;
   refit: () => void;
   capture: () => { thumbnail: string; phase: number; visual: VisualState };
+  // 冲印用：按指定像素重画一张当前画面（作品居中，不为界面留边），画完恢复原来的取景。
+  renderStill: (width: number, height: number) => HTMLCanvasElement;
   dispose: () => void;
 }
 
@@ -349,6 +355,11 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     uVariantA: { value: new THREE.Vector4(0, 1, 1, 0) },
     uVariantB: { value: new THREE.Vector4(0, 1, 1, 0) },
     uHeat: { value: 0 },
+    uColorLit: { value: new THREE.Color(1, 1, 1) },
+    uColorShade: { value: new THREE.Color(0.2, 0.25, 0.34) },
+    uColorGlow: { value: new THREE.Color(1, 1, 1) },
+    uVivid: { value: 0 },
+    uColorDepth: { value: 1 },
     uDevelop: { value: 0 },
     uScreen: { value: new THREE.Vector2(2, 2) },
     uScreenRadius: { value: params.radius * SCREEN_RADIUS_PER_WORLD },
@@ -656,6 +667,8 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
   let frozen = false;
   const currentVisual: VisualState = { ...DEFAULT_VISUAL };
   let targetVisual: VisualState = { ...DEFAULT_VISUAL };
+  // 配色的目标；鲜艳度为 0 时只剩单色，三种颜色保留着，淡出时不会先变色再消失。
+  const targetColor = { lit: new THREE.Color(1, 1, 1), shade: new THREE.Color(0.2, 0.25, 0.34), glow: new THREE.Color(1, 1, 1), vivid: 0 };
   // 正在进行的显影的开始时刻。
   let developStart: number | null = null;
 
@@ -704,6 +717,13 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
       uniforms.uHeat.value = flame * (0.25 + 0.75 * THREE.MathUtils.smoothstep(currentVisual.warmth, 0.4, 0.85));
     }
     uniforms.uLight.value = (0.8 + currentVisual.luminosity * 0.4) * (1 + pulse * 0.16) * (1 + glow);
+    // 配色与作品参数同样的速度变过去；凝结和减少动态时直接到位。
+    const colorBlend = frozen || motion.matches ? 1 : 1 - Math.exp(-delta * 2.5);
+    uniforms.uColorLit.value.lerp(targetColor.lit, colorBlend);
+    uniforms.uColorShade.value.lerp(targetColor.shade, colorBlend);
+    uniforms.uColorGlow.value.lerp(targetColor.glow, colorBlend);
+    uniforms.uVivid.value += (targetColor.vivid - uniforms.uVivid.value) * colorBlend;
+    uniforms.uColorDepth.value = 0.6 + 0.8 * Math.min(currentVisual.luminosity, 0.5);
     const temperature = (currentVisual.warmth - 0.5) * 0.44;
     uniforms.uTint.value.set(1 + temperature, 1, 1 - temperature);
 
@@ -801,6 +821,22 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
     setParams,
     setVisual(visual) { targetVisual = { ...visual }; },
     setForm(form) { chosenForm = form ? { index: imageIndex(form.image), variant: form.variant } : null; },
+    setColor(color, immediate = false) {
+      if (!color) targetColor.vivid = 0;
+      else {
+        const palette = findPalette(color.palette);
+        targetColor.lit.set(palette.lit);
+        targetColor.shade.set(palette.shade);
+        targetColor.glow.set(palette.glow);
+        targetColor.vivid = THREE.MathUtils.clamp(color.vivid, 0, 1);
+      }
+      if (immediate) {
+        uniforms.uColorLit.value.copy(targetColor.lit);
+        uniforms.uColorShade.value.copy(targetColor.shade);
+        uniforms.uColorGlow.value.copy(targetColor.glow);
+        uniforms.uVivid.value = targetColor.vivid;
+      }
+    },
     develop() {
       if (frozen || motion.matches || !mode) return;
       developStart = performance.now();
@@ -846,6 +882,43 @@ export function createReliefScene(container: HTMLElement, ring: HTMLElement, opt
       if (thumbnail.length > 150_000) thumbnail = draw(480).toDataURL('image/jpeg', 0.75);
       if (thumbnail.length > 150_000) thumbnail = draw(480).toDataURL('image/jpeg', 0.5);
       return { thumbnail, phase: time, visual: { ...currentVisual } };
+    },
+    renderStill(width, height) {
+      if (contextLost || !mode) throw new Error('画面还没有准备好，请稍等再冲印。');
+      // 存档只有 640 像素宽的封面；作品的意象、参数、颜色和时刻都在，按相纸大小重画一张更清楚。
+      const size = renderer.getSize(new THREE.Vector2());
+      const ratio = renderer.getPixelRatio();
+      const saved = { aspect: camera.aspect, z: camera.position.z, y: group.position.y, screen: uniforms.uScreen.value.clone(),
+        proj: uniforms.uProj.value, minSize: uniforms.uMinSize.value };
+      const halfTan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      renderer.setPixelRatio(1);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      camera.position.z = Math.max(contentSize.y * 1.18 / 2 / halfTan, contentSize.x * 1.18 / 2 / halfTan / camera.aspect);
+      group.position.y = 0;
+      group.updateMatrixWorld();
+      uniforms.uScreen.value.set(camera.aspect * 2, 2);
+      uniforms.uProj.value = height / (2 * halfTan);
+      uniforms.uMinSize.value = 1.5 * Math.max(1, height / 900);
+      renderer.render(scene, camera);
+      const still = document.createElement('canvas');
+      still.width = width;
+      still.height = height;
+      still.getContext('2d')?.drawImage(canvas, 0, 0);
+      // 恢复原来的大小与取景，并立刻补画一帧，屏幕上不会闪黑。
+      renderer.setPixelRatio(ratio);
+      renderer.setSize(size.x, size.y, false);
+      camera.aspect = saved.aspect;
+      camera.updateProjectionMatrix();
+      camera.position.z = saved.z;
+      group.position.y = saved.y;
+      group.updateMatrixWorld();
+      uniforms.uScreen.value.copy(saved.screen);
+      uniforms.uProj.value = saved.proj;
+      uniforms.uMinSize.value = saved.minSize;
+      renderer.render(scene, camera);
+      return still;
     },
     dispose() {
       renderer.setAnimationLoop(null);

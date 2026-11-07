@@ -8,6 +8,7 @@ import type { ReliefPhoto, SceneSnapshot } from './artwork';
 import type { ParticleSceneHandle } from './ParticleScene';
 import type { VisualState } from './visual';
 import type { SculptureForm } from './imagery';
+import type { SculptureColor } from './palette';
 import type { ActivitySignal } from './emotionShape';
 
 // 比 /relief-lab 更细更密：颗粒小、数量多，表面才细腻。触屏和小屏密度低一档，保证按压流畅。
@@ -32,8 +33,10 @@ function measureInsets(container: HTMLElement) {
 }
 
 // 新画法的 React 外壳：有照片时显示照片浮雕，没有照片时显示默认雕塑。
-export default function ReliefView({ photo, visual, form = null, snapshot = null, active = true, activity, develop = 0, onStroke, ref }: {
+export default function ReliefView({ photo, visual, form = null, color = null, snapshot = null, active = true, activity, develop = 0, onStroke, ref }: {
   photo: ReliefPhoto | null; visual: VisualState; form?: SculptureForm | null; snapshot?: SceneSnapshot | null; active?: boolean;
+  // 雕塑的配色；null 为单色。照片不受影响。
+  color?: SculptureColor | null;
   activity?: { current: ActivitySignal };
   // 手指按在作品上拨开时每帧回调，参数是秒数。
   onStroke?: (seconds: number) => void;
@@ -46,6 +49,7 @@ export default function ReliefView({ photo, visual, form = null, snapshot = null
   const sceneRef = useRef<ReliefScene | null>(null);
   const visualRef = useRef(visual);
   const formRef = useRef(form);
+  const colorRef = useRef(color);
   const [error, setError] = useState<string | null>(null);
 
   useImperativeHandle(ref, () => ({ capture() {
@@ -55,10 +59,14 @@ export default function ReliefView({ photo, visual, form = null, snapshot = null
     const common = { version: 3, seed: NEBULA_SEED, phase: shot.phase, visual: shot.visual, photo: null };
     return {
       scene: validateSnapshot(photo ? { ...common, kind: 'relief', relief: photo }
-        : { ...common, kind: 'sculpture', ...(form ? { form } : {}) }),
+        : { ...common, kind: 'sculpture', ...(form ? { form } : {}), ...(color ? { color } : {}) }),
       thumbnail: shot.thumbnail,
     };
-  } }), [photo, form]);
+  }, renderStill(width, height) {
+    const scene = sceneRef.current;
+    if (!scene) throw new Error('画面还没有准备好，请稍等再冲印。');
+    return scene.renderStill(width, height);
+  } }), [photo, form, color]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -75,6 +83,7 @@ export default function ReliefView({ photo, visual, form = null, snapshot = null
     sceneRef.current = scene;
     scene.setVisual(visualRef.current);
     scene.setForm(formRef.current);
+    scene.setColor(colorRef.current, true);
     // 输入条长高、切换语音条时重新取景。
     const observer = new ResizeObserver(() => scene.refit());
     const dock = container.closest('.experience')?.querySelector('.dock-area');
@@ -97,6 +106,8 @@ export default function ReliefView({ photo, visual, form = null, snapshot = null
 
   useEffect(() => { visualRef.current = visual; sceneRef.current?.setVisual(visual); }, [visual]);
   useEffect(() => { formRef.current = form; sceneRef.current?.setForm(form); }, [form]);
+  // 颜色对象每次渲染都会重算，按内容比较。凝结、打开回廊时画面定住，颜色直接到位。
+  useEffect(() => { colorRef.current = color; sceneRef.current?.setColor(color); }, [color?.palette, color?.vivid]);
   useEffect(() => { if (develop) sceneRef.current?.develop(); }, [develop]);
 
   useEffect(() => {

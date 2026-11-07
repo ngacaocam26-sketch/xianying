@@ -23,6 +23,9 @@ import { nameMoment } from './title';
 import type { TranscriptLine } from './title';
 import { OPENING_FORM } from './imagery';
 import type { SculptureForm } from './imagery';
+import { colorFor } from './palette';
+import { composePrint, PRINT_IMAGE, printFileName, sheetToBlob, STILL_SCALE } from './print';
+import PrintSheet from './PrintSheet';
 
 type ChatState = { link: ChatLink; busy: boolean };
 
@@ -65,6 +68,11 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
   // 当前作品是从回廊打开的：卡片上的按钮写「返回回廊」。
   const [fromGallery, setFromGallery] = useState(false);
   const [dispersing, setDispersing] = useState(false);
+  // 冲印：相纸在本机生成；重画的作品画面按作品留着，切换“印上总结”时不必重画。
+  const [print, setPrint] = useState<{ blob: Blob; name: string; workId: string } | null>(null);
+  const [printing, setPrinting] = useState(false);
+  const [printSummary, setPrintSummary] = useState(true);
+  const stillRef = useRef<{ id: string; image: HTMLCanvasElement | HTMLImageElement } | null>(null);
   const [veiled, setVeiled] = useState(false);
   const [expressionId, setExpressionId] = useState(0);
   const [chatState, setChatState] = useState<ChatState>({ link: 'checking', busy: false });
@@ -93,6 +101,8 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
   // 交给模型的仍是 form，开场的雾不算用户此刻的感受。
   const legacySculpture = snapshot?.kind === 'sculpture' && !snapshot.form;
   const shownForm = form ?? (legacySculpture ? null : OPENING_FORM);
+  // 颜色跟着 AI 选的意象走：开场的雾和照片保持单色；凝结后和回廊里用作品存下的颜色，没有记录的旧作品仍是单色。
+  const shownColor = snapshot ? snapshot.color ?? null : form && !relief ? colorFor(form, visual) : null;
 
   // React 只管理入口和界面反馈；逐帧粒子数据由 ParticleScene 自己维护。
   useEffect(() => {
@@ -241,6 +251,36 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
       returnToDarkroom(); setNotice({ text: '这一刻已散去。回廊里的记录保持原样。' });
     }, reduce ? 0 : 600);
   };
+  const closePrint = () => setPrint(null);
+  const developPrint = async (withSummary: boolean) => {
+    if (!artwork || printing) return;
+    const work = artwork;
+    setPrinting(true);
+    try {
+      let still = stillRef.current?.id === work.id ? stillRef.current.image : null;
+      if (!still) {
+        try {
+          still = sceneRef.current?.renderStill?.(PRINT_IMAGE.width * STILL_SCALE, PRINT_IMAGE.height * STILL_SCALE) ?? null;
+        } catch { still = null; }
+        // 旧版画法或重画失败时，用存档里的封面截图。
+        if (!still) {
+          const cover = new Image();
+          cover.src = work.thumbnail;
+          await cover.decode();
+          still = cover;
+        }
+        stillRef.current = { id: work.id, image: still };
+      }
+      const sheet = await composePrint(still, { ...work, title: work.title.trim() || '此刻的显影' }, withSummary);
+      const blob = await sheetToBlob(sheet);
+      setPrint({ blob, name: printFileName(work.title.trim() || '此刻的显影', work.createdAt), workId: work.id });
+    } catch (cause) {
+      setNotice({ text: cause instanceof Error ? cause.message : '这次没能冲印，请重试。' });
+    } finally { setPrinting(false); }
+  };
+  // 换了作品（返回暗房、打开另一件、继续表达）就收起相纸。
+  useEffect(() => { if (!artwork || (print && print.workId !== artwork.id)) closePrint(); }, [artwork?.id]);
+
   const continueExpression = () => {
     if (savePending.current) return;
     generation.current++; stopNaming(); setSnapshot(null); setArtwork(null); setSaved(false); setSaveError(''); setFromGallery(false);
@@ -293,7 +333,7 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
       <main className="scene-stage" ref={stageRef} aria-label="显影互动暗房" aria-hidden={galleryOpen}>
         {photo || snapshot?.kind === 'nebula'
           ? <ParticleScene ref={sceneRef} photo={photo} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} />
-          : <ReliefView ref={sceneRef} photo={relief} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} form={shownForm} develop={developId} onStroke={onStroke} />}
+          : <ReliefView ref={sceneRef} photo={relief} visual={visual} snapshot={snapshot} active={!galleryOpen} activity={activityRef} form={shownForm} color={shownColor} develop={developId} onStroke={onStroke} />}
       </main>
       {caption && expressing && <div key={caption.id} className="reveal-caption" role="status" aria-live="polite">
         <p className="reveal-form">{caption.name}</p>
@@ -336,6 +376,9 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
             : <button type="button" className="orb is-keep" disabled={saving || dispersing || naming} onClick={() => void saveArtwork()}>
               <span className="orb-face"><Icon name="check" /></span><span className="orb-label">{saving ? '正在保存' : '留下它'}</span>
             </button>}
+          <button type="button" className="orb" disabled={saving || dispersing || naming} aria-busy={printing} onClick={() => void developPrint(printSummary)}>
+            <span className="orb-face"><Icon name="print" /></span><span className="orb-label">{printing ? '正在冲印' : '冲印'}</span>
+          </button>
           <button type="button" className="orb" disabled={saving || dispersing} onClick={continueExpression}>
             <span className="orb-face"><Icon name="again" /></span><span className="orb-label">继续表达</span>
           </button>
@@ -345,6 +388,9 @@ export default function App({ gallery = localGallery, voiceSessionFactory }: { g
         </div>
         <p className="work-privacy">仍可以拨动它 · 只存在这个浏览器，不含聊天、录音和原文件</p>
       </section>}
+
+      {print && artwork && <PrintSheet blob={print.blob} name={print.name} label={`冲印好的相纸：${artwork.title}`} busy={printing} onClose={closePrint}
+        option={artwork.summary ? { text: '印上那句总结', checked: printSummary, onChange: checked => { setPrintSummary(checked); void developPrint(checked); } } : undefined} />}
 
       <dialog className="info-dialog" ref={infoRef} aria-labelledby="info-title" onClick={(event) => { if (event.target === event.currentTarget) infoRef.current?.close(); }}>
         <div className="info-content">

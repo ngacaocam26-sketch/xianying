@@ -109,3 +109,18 @@ test('a sculpture keeps the imagery the model chose; older sculptures and photos
   }
   assert.throws(() => validateArtwork({ ...reliefWork(), scene: { ...reliefWork().scene, form } }));
 });
+
+test('a sculpture keeps its palette; works saved before colours, photos and broken colours never get one', () => {
+  const visual = { dispersion: 0.4, motion: 0.6, warmth: 0.8, openness: 0.5, tension: 0.7, coherence: 0.5, weight: 0.5, luminosity: 0.7 };
+  const scene = { version: 3, kind: 'sculpture', seed: NEBULA_SEED, phase: 2, visual, photo: null,
+    form: { image: 'bloom', name: '终于开了', variant: 0.3 } };
+  const color = { palette: 'peach', vivid: 0.92 };
+  const work = validateArtwork({ ...base(), version: 3, scene: { ...scene, color } });
+  assert.deepEqual(validateArtwork(structuredClone(work)).scene.color, color);
+  // 配色出现之前保存的作品没有 color，打开时保持单色。
+  assert.equal('color' in validateArtwork({ ...base(), version: 3, scene }).scene, false);
+  for (const bad of [{ palette: 'rainbow', vivid: 0.5 }, { palette: 'peach', vivid: 1.5 }, { palette: 'peach' }, null, 'peach']) {
+    assert.throws(() => validateArtwork({ ...base(), version: 3, scene: { ...scene, color: bad } }));
+  }
+  assert.throws(() => validateArtwork({ ...reliefWork(), scene: { ...reliefWork().scene, color } }));
+});

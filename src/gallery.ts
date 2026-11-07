@@ -1,12 +1,17 @@
 import { artworkCard, validateArtwork, validateCard } from './artwork.ts';
 import type { Artwork, ArtworkCard } from './artwork.ts';
+import { cleanNote, isDay } from './diary.ts';
 
 export interface GalleryRepository {
   list(): Promise<ArtworkCard[]>;
   get(id: string): Promise<Artwork>;
   save(work: Artwork): Promise<Artwork>;
   setRemoved(id: string, removed: boolean): Promise<void>;
+  // 日记里用户给某一天写的一句（day 为 YYYY-MM-DD）；写空即删除。返回实际存下的文字。
+  listNotes(): Promise<Record<string, string>>;
+  setNote(day: string, note: string): Promise<string>;
 }
+type Store = 'works' | 'cards' | 'days';
 function storageError(error: unknown): Error {
   const name = error instanceof Error ? error.name : '';
   if (name === 'QuotaExceededError') return new Error('本地空间不足，这件作品还没有保存。请保留当前页面，释放浏览器空间后重试。');
@@ -33,11 +38,13 @@ export function createGalleryRepository(name = 'xianying-local-gallery', factory
       const fail = (error: unknown) => { settled = true; clearTimeout(timer); reject(storageError(error)); };
       const timer = setTimeout(() => fail(new Error('本地存档打开较慢，请关闭同站点的其他旧页面后重试。')), 5000);
       let opening: IDBOpenDBRequest;
-      try { opening = idb.open(name, 1); } catch (error) { fail(error); return; }
+      // 版本 2 新增 days（日记里写给每一天的一句）；从版本 1 升级时作品和卡片原样保留。
+      try { opening = idb.open(name, 2); } catch (error) { fail(error); return; }
       opening.onupgradeneeded = () => {
         const db = opening.result;
         if (!db.objectStoreNames.contains('works')) db.createObjectStore('works', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('cards')) db.createObjectStore('cards', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('days')) db.createObjectStore('days', { keyPath: 'day' });
       };
       opening.onblocked = () => fail(new Error('存档被其他旧页面占用，请关闭同站点的其他页面后重试。'));
       opening.onerror = () => fail(opening.error);
@@ -48,11 +55,11 @@ export function createGalleryRepository(name = 'xianying-local-gallery', factory
       };
     });
   }
-  async function transaction<T>(mode: IDBTransactionMode, action: (tx: IDBTransaction) => Promise<T>): Promise<T> {
+  async function transaction<T>(mode: IDBTransactionMode, action: (tx: IDBTransaction) => Promise<T>, stores: Store[] = ['works', 'cards']): Promise<T> {
     const db = await open();
     let tx: IDBTransaction | undefined;
     try {
-      tx = db.transaction(['works', 'cards'], mode); const done = completed(tx);
+      tx = db.transaction(stores, mode); const done = completed(tx);
       const result = await action(tx); await done; return result;
     } catch (error) {
       try { tx?.abort(); } catch { /* Already committed/aborted. */ }
@@ -88,6 +95,24 @@ export function createGalleryRepository(name = 'xianying-local-gallery', factory
       const card = validateCard(value);
       await request(store.put({ ...card, removedAt: removed ? Date.now() : null }));
     }),
+    listNotes: () => transaction('readonly', async tx => {
+      const notes: Record<string, string> = {};
+      for (const value of await request(tx.objectStore('days').getAll()) as unknown[]) {
+        const { day, note } = (value ?? {}) as { day?: unknown; note?: unknown };
+        if (isDay(day) && typeof note === 'string' && cleanNote(note)) notes[day] = cleanNote(note);
+      }
+      return notes;
+    }, ['days']),
+    setNote: (day, note) => {
+      if (!isDay(day)) return Promise.reject(new Error('这一天的日期不对，没有记下。'));
+      const text = cleanNote(note);
+      return transaction('readwrite', async tx => {
+        const store = tx.objectStore('days');
+        if (text) await request(store.put({ day, note: text, updatedAt: Date.now() }));
+        else await request(store.delete(day));
+        return text;
+      }, ['days']);
+    },
   };
 }
 export const localGallery = createGalleryRepository();

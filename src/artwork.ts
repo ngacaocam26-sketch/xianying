@@ -3,6 +3,8 @@ import type { VisualState, LegacyVisual } from './visual.ts';
 import type { PhotoParticleData } from './photoToParticles.ts';
 import { validateForm } from './imagery.ts';
 import type { SculptureForm } from './imagery.ts';
+import { validateColor } from './palette.ts';
+import type { SculptureColor } from './palette.ts';
 
 export const NEBULA_SEED = 0x5849414e;
 // v3 照片浮雕保存缩小重编码的照片（最长边 ≤ 1024，无原文件元数据），恢复时由它重新生成粒子。
@@ -12,6 +14,8 @@ export type SceneSnapshot = {
   visual: VisualState | LegacyVisual; photo: PhotoParticleData | null; relief?: ReliefPhoto;
   // 大模型为默认雕塑选的意象、名字与随机变化；更早的 v3 雕塑没有这一项，按参数规则恢复。
   form?: SculptureForm;
+  // 凝结时雕塑的配色；没有这一项的作品（包括配色出现之前保存的）恢复为单色。
+  color?: SculptureColor;
 };
 export type Artwork = {
   version: 1 | 2 | 3; id: string; title: string; createdAt: number; thumbnail: string; scene: SceneSnapshot;
@@ -74,8 +78,14 @@ export function validateSnapshot(value: unknown): SceneSnapshot {
     if (!valid) throw invalid();
     form = valid;
   }
+  let color: SculptureColor | undefined;
+  if (input.color !== undefined) {
+    const valid = input.kind === 'sculpture' ? validateColor(input.color) : null;
+    if (!valid) throw invalid();
+    color = valid;
+  }
   return { version: input.version as 1 | 2 | 3, kind: input.kind as SceneSnapshot['kind'], seed: NEBULA_SEED, phase, visual, photo,
-    ...(relief ? { relief } : {}), ...(form ? { form } : {}) };
+    ...(relief ? { relief } : {}), ...(form ? { form } : {}), ...(color ? { color } : {}) };
 }
 function metadata(value: unknown) {
   const input = object(value);

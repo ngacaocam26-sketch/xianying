@@ -87,3 +87,34 @@
   .relief-status { top: 58px; font-size: 11px; }
   .relief-panel { top: auto; bottom: 150px; left: 16px; right: 16px; width: auto; }
 }
+
+/* 颜色试验页：底部一块面板，意象与配色两行可横向滑动，下面三条滑杆。 */
+.color-dock {
+  position: absolute; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 10px; width: min(760px, calc(100% - 24px));
+  padding: 14px 14px 10px; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 16px;
+  background: rgba(12, 15, 18, 0.62); backdrop-filter: blur(18px);
+  font-family: var(--font-serif); font-size: 12px; color: rgba(208, 216, 222, 0.8);
+}
+.color-readout { margin: 0 2px; color: rgba(236, 240, 243, 0.85); letter-spacing: 0.12em; }
+.color-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.color-row button {
+  display: flex; align-items: center; gap: 6px; flex: none; padding: 6px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; background: rgba(255, 255, 255, 0.03);
+  color: rgba(214, 221, 226, 0.72); font: 12px var(--font-serif); letter-spacing: 0.06em; white-space: nowrap;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.color-row button:hover { color: #f1f4f6; }
+.color-row button[aria-pressed="true"] { color: #f6f8fa; border-color: rgba(255, 255, 255, 0.42); background: rgba(255, 255, 255, 0.1); }
+.color-swatch { display: block; width: 14px; height: 14px; border-radius: 50%; }
+.color-swatch.is-mono { background: radial-gradient(circle at 38% 36%, #f3f6f9 0 30%, #7a8a9e 100%); }
+.color-sliders { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 16px; }
+.color-sliders label { display: grid; grid-template-columns: auto 1fr 30px; align-items: center; gap: 8px; min-height: 28px; }
+.color-sliders input { width: 100%; accent-color: #d8e0e6; }
+.color-sliders input:disabled { opacity: 0.3; }
+.color-sliders output { text-align: right; font-family: var(--font-latin); color: rgba(208, 216, 222, 0.55); }
+
+@media (max-width: 600px) {
+  .color-sliders { grid-template-columns: 1fr; }
+}
+.color-row button em { font: normal 10px var(--font-serif); color: rgba(240, 214, 170, 0.75); letter-spacing: 0.04em; }
