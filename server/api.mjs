@@ -39,7 +39,8 @@ export function readConfig(env = process.env) {
 
 function validateMessages(body) {
   const messages = body?.messages;
-  if (!Array.isArray(messages) || messages.length < 1 || messages.length > 11 ||
+  // 最近 12 轮对话 + 当前一句。
+  if (!Array.isArray(messages) || messages.length < 1 || messages.length > 25 ||
       messages.length % 2 !== 1) {
     throw new ApiError(400, 'INVALID_INPUT', '对话内容格式不正确，请开始一段新对话。');
   }

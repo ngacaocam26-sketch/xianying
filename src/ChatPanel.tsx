@@ -12,6 +12,19 @@ import type { TranscriptLine } from './title';
 // 用户没有说话、只是用手指拨开作品时，交给 AI 的那一句；对话里也照实显示。
 export const TOUCH_INPUT = '（没有说话，用手指把它拨开了一会儿）';
 
+// 往根上聊需要记得前面说过的事：最多带最近 12 轮，总字数超出时先丢最早的几轮（服务端上限 24000 字）。
+const HISTORY_TURNS = 12;
+const HISTORY_CHARS = 20000;
+function recentHistory(turns: { input: string; output: string }[]) {
+  const kept = turns.slice(-HISTORY_TURNS);
+  let total = kept.reduce((sum, turn) => sum + turn.input.length + turn.output.length, 0);
+  while (kept.length && total > HISTORY_CHARS) {
+    const dropped = kept.shift()!;
+    total -= dropped.input.length + dropped.output.length;
+  }
+  return kept;
+}
+
 type Turn = {
   id: number; input: string; output: string;
   state: 'pending' | 'done' | 'error' | 'stopped'; error?: string; visualNote?: string;
@@ -107,7 +120,7 @@ export default function ChatPanel({ open, photo, photoBusy, visual, form = null,
     requestRef.current = controller;
     const previous = retry ? turns.filter((turn) => turn.id !== retry.id) : turns;
     // Only complete turns are sent as context. Failed fragments never become AI history.
-    const history: ChatMessage[] = previous.filter((turn) => turn.state === 'done').slice(-5)
+    const history: ChatMessage[] = recentHistory(previous.filter((turn) => turn.state === 'done'))
       .flatMap((turn) => [
         { role: 'user' as const, content: turn.input },
         { role: 'assistant' as const, content: turn.output },
