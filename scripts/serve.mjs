@@ -49,7 +49,7 @@ const port = Number(process.env.PORT) || 3000;
 const host = process.env.HOST || '127.0.0.1';
 server.listen(port, host, () => {
   console.log(`显影已启动：http://${host}:${port}/`);
-  console.log(config.apiKey ? `已读取 API Key（${config.model}）。` : '尚未配置 API Key：粒子和照片可用，AI 对话不可用。');
+  console.log(config.apiKey ? `已读取 API Key（对话 ${config.chatModel}，每天上限 ${config.dailyBudget} 元；之后及起名用 ${config.model}）。` : '尚未配置 API Key：粒子和照片可用，AI 对话不可用。');
 });
 
 function shutdown() {

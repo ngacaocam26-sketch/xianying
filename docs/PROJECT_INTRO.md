@@ -83,7 +83,8 @@ Node 服务（同一端口提供页面、/api 与语音）
   └─ /api/voice      实时语音中转
         │
 阿里云百炼（北京）
-  ├─ qwen3.8-flash               文字对话、看照片、起名
+  ├─ qwen3.8-max                 文字对话、看照片（每天有花费上限，花到后退回 flash）
+  ├─ qwen3.8-flash               起名、语音转雕塑
   └─ qwen3.8-omni-flash-realtime 实时语音对话
 ```
 

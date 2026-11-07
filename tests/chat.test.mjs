@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { createApiHandler, readConfig } from '../server/api.mjs';
+import { costOf, createApiHandler, readConfig } from '../server/api.mjs';
 import { streamChat } from '../src/chat.ts';
 import { DEFAULT_VISUAL } from '../src/visual.ts';
 import { partialReply, parseArtResponse } from '../server/artResponse.mjs';
@@ -249,4 +249,31 @@ test('title API names the moment from the transcript, cleans punctuation and rej
   const failed = await name({ lines });
   assert.equal(failed.status, 502);
   assert.ok(!(await failed.text()).includes('空标题'));
+});
+
+test('chat replies use the stronger model until the daily budget is spent, then fall back; naming stays on the light model', async (t) => {
+  assert.equal(readConfig({}).chatModel, 'qwen3.8-max');
+  assert.equal(readConfig({}).model, 'qwen3.8-flash');
+  assert.equal(readConfig({}).dailyBudget, 5);
+  assert.equal(readConfig({ XIANYING_DAILY_BUDGET_YUAN: '2.5', QWEN_CHAT_MODEL: 'qwen3.7-plus' }).dailyBudget, 2.5);
+  assert.equal(readConfig({ XIANYING_DAILY_BUDGET_YUAN: 'lots' }).dailyBudget, 5);
+  // 不认识的型号按旗舰价估算。
+  assert.equal(costOf('some-new-model', { prompt_tokens: 1e6, completion_tokens: 0 }), 12);
+
+  const models = [];
+  // 每次对话：1000 输入 + 200 输出 tokens，在 max 上约 0.0192 元；上限 0.03 元，第二次之后就花到了。
+  const usage = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 1000, completion_tokens: 200 } })}\n\n`;
+  const app = await fixture(t, { config: { ...config, chatModel: 'qwen3.8-max', dailyBudget: 0.03 }, fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body);
+    models.push(body.model);
+    if (!body.stream) return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ title: '虚构的标题', summary: '你在测试' }) }, finish_reason: 'stop' }] }));
+    assert.deepEqual(body.stream_options, { include_usage: true });
+    return streamResponse(frame(JSON.stringify({ reply: '测试回复', visual: DEFAULT_VISUAL })) + frame('', 'stop') + usage + 'data: [DONE]\n\n');
+  } });
+  for (let i = 0; i < 3; i++) assert.equal((await app.post()).status, 200);
+  await fetch(`${app.base}/api/title`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lines: [{ role: 'user', text: '虚构测试：今天很开心。' }] }) });
+  assert.deepEqual(models, ['qwen3.8-max', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-flash']);
+  const status = await (await fetch(`${app.base}/api/status`)).json();
+  assert.equal(status.chatModel, 'qwen3.8-max');
 });

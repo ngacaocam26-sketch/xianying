@@ -14,6 +14,20 @@ function limit(value, fallback) {
   const number = Number.parseInt(String(value ?? ''), 10);
   return Number.isFinite(number) && number > 0 && number <= 1000 ? number : fallback;
 }
+// 金额可以带小数（如 2.5 元），范围 0—1000。
+function money(value, fallback) {
+  const text = String(value ?? '').trim();
+  const number = /^\d+(\.\d+)?$/.test(text) ? Number(text) : NaN;
+  return number > 0 && number <= 1000 ? number : fallback;
+}
+
+// 每百万 tokens 的价格（元，北京地域，百炼价格页），用来估算对话每天花了多少。
+// 不认识的型号按旗舰价算：宁可早一点退回便宜的模型，也不多花。
+export const MODEL_PRICES = { 'qwen3.8-flash': [0.8, 2.7], 'qwen3.8-max': [12, 36] };
+export function costOf(model, usage) {
+  const [input, output] = MODEL_PRICES[model] ?? MODEL_PRICES['qwen3.8-max'];
+  return ((usage?.prompt_tokens ?? 0) * input + (usage?.completion_tokens ?? 0) * output) / 1e6;
+}
 
 export function readConfig(env = process.env) {
   const workspace = (env.DASHSCOPE_WORKSPACE_ID ?? '').trim();
@@ -22,7 +36,11 @@ export function readConfig(env = process.env) {
   }
   return {
     apiKey: (env.DASHSCOPE_API_KEY ?? '').trim(),
+    // 起名字、语音转雕塑这些简单活用 model；对话回复用更会往根上找的 chatModel。
     model: (env.QWEN_MODEL ?? '').trim() || 'qwen3.8-flash',
+    chatModel: (env.QWEN_CHAT_MODEL ?? '').trim() || 'qwen3.8-max',
+    // 对话每天最多在 chatModel 上花多少元（按北京时间换日）；花到了，当天剩下的对话退回 model。
+    dailyBudget: money(env.XIANYING_DAILY_BUDGET_YUAN, 5),
     realtimeModel: (env.QWEN_REALTIME_MODEL ?? '').trim() || 'qwen3.8-omni-flash-realtime',
     realtimeVoice: (env.QWEN_REALTIME_VOICE ?? '').trim() || 'Tina',
     // 全站上限，保护密钥额度：本机默认很保守，公开演示时在服务器上调高。
@@ -153,6 +171,13 @@ export function createApiHandler({
 } = {}) {
   let active = 0;
   let requests = [];
+  // 当天对话在 chatModel 上花了多少：只记在内存里，服务重启后从 0 算。
+  let spendDay = '', spent = 0;
+  const spentToday = () => {
+    const day = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+    if (day !== spendDay) { spendDay = day; spent = 0; }
+    return spent;
+  };
   return async (req, res) => {
     const path = req.url?.split('?')[0];
     res.setHeader('Cache-Control', 'no-store');
@@ -175,7 +200,7 @@ export function createApiHandler({
       }
     }
     if (path === '/api/status' && req.method === 'GET') {
-      json(200, { configured: Boolean(config.apiKey), provider: '阿里云百炼', model: config.model,
+      json(200, { configured: Boolean(config.apiKey), provider: '阿里云百炼', model: config.model, chatModel: config.chatModel ?? config.model,
         realtimeModel: config.realtimeModel });
       return;
     }
@@ -214,16 +239,19 @@ export function createApiHandler({
       requests.push(now);
       active++;
       counted = true;
+      const strong = !naming && !sculpture && config.chatModel && config.chatModel !== config.model;
+      const model = strong && spentToday() < (config.dailyBudget ?? Infinity) ? config.chatModel : config.model;
       const upstream = await fetchImpl(`${config.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: config.model,
+          model,
           messages: [{ role: 'system', content: naming ? TITLE_PROMPT
             : (sculpture ? SCULPTURE_PROMPT : SYSTEM_PROMPT) + '\n当前作品参数：' + JSON.stringify(currentVisual)
               + '\n当前意象：' + (currentForm ? JSON.stringify(currentForm) : '尚未选择') }, ...messages],
           response_format: naming ? TITLE_RESPONSE_FORMAT : sculpture ? SCULPTURE_RESPONSE_FORMAT : ART_RESPONSE_FORMAT,
           stream: !sculpture && !naming,
+          ...(!sculpture && !naming ? { stream_options: { include_usage: true } } : {}),
           enable_thinking: false,
           // 用户提问时回复可以到两三百字，再加作品参数的 JSON，留足余量免得被截断。
           max_tokens: naming ? 200 : sculpture ? 350 : 1400,
@@ -257,11 +285,13 @@ export function createApiHandler({
       let received = '';
       let sentReply = '';
       let finished = false;
+      let usage = null;
       for await (const data of readSse(upstream.body)) {
         if (!data) continue;
         if (data === '[DONE]') break;
         const chunk = JSON.parse(data);
         if (chunk.error) throw new Error('Upstream stream error');
+        if (chunk.usage) usage = chunk.usage;
         const choice = chunk.choices?.[0];
         const content = choice?.delta?.content;
         if (typeof content === 'string' && content) {
@@ -276,6 +306,8 @@ export function createApiHandler({
         if (choice?.finish_reason === 'stop') finished = true;
         else if (choice?.finish_reason) throw new ApiError(502, 'INCOMPLETE', '这次回复没有完整生成，可以重试。');
       }
+      // 用量在流的最后一帧；收到了就记上，这次回复不完整也照样计费。
+      if (model === config.chatModel && usage) { spentToday(); spent += costOf(model, usage); }
       if (!finished || !received.trim()) throw new Error('Incomplete upstream stream');
       const result = parseArtResponse(received);
       if (!result.reply.startsWith(sentReply)) throw new Error('Invalid final reply');

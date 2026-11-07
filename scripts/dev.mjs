@@ -23,7 +23,7 @@ try {
   await vite.listen();
   vite.printUrls();
   console.log(config.apiKey
-    ? `显影文字对话：已读取本机配置（${config.model}），实际连通性待发送验证。`
+    ? `显影文字对话：已读取本机配置（对话 ${config.chatModel}，每天上限 ${config.dailyBudget} 元，之后及起名用 ${config.model}），实际连通性待发送验证。`
     : '显影文字对话：尚未配置 API Key。填写项目 .env 后重启；粒子和照片可照常使用。');
 } catch (error) {
   voice.close();
